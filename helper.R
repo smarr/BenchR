@@ -1,0 +1,57 @@
+## Provides Helper functions for standard problems with my benchmarking data
+
+# make sure the required library is loaded
+library(doBy)
+library(ggplot2)
+
+# define helper functions
+
+### Load Data
+
+load_data <- function () {
+  # REM: the row names are hard coded and could have changed
+  rowNames <- c("Time", "Benchmark", "VirtualMachine", "Platform",
+                "ExtraArguments", "Cores", "Iterations", "None", "Criterion")
+
+  bench <- rbind(read.table("~/Projects/PhD/IBM/notes/scheduling-issue/osx.data.csv",
+                            sep="\t", header=FALSE, col.names=rowNames),
+                 read.table("~/Projects/PhD/IBM/notes/scheduling-issue/ubuntu.data.csv",
+                            sep="\t", header=FALSE, col.names=rowNames),
+                 read.table("~/Projects/PhD/IBM/notes/scheduling-issue/tilera.data.csv",
+                            sep="\t", header=FALSE, col.names=rowNames))
+  bench
+}
+
+# Prepare some readable/shorter names for the plots, hope we can map that somehow
+bench_names <- function() {
+  data.frame( "BenchmarkGameSuite.benchFasta.%(cores)s 1 15000"="Fasta",
+                          "BenchmarkGameSuite.benchNBody.%(cores)s 1 4000" = "NBody", 
+                          "BenchmarkGameSuite.benchFannkuchRedux.%(cores)s 1 7"="FannkuchRedux",
+                          "BenchmarkGameSuite.benchBinaryTrees.%(cores)s 1 9" = "BinaryTrees", 
+                          "SMarkLoops.benchIntLoop.%(cores)s 30"="Int Loop (1 proc per core)",
+                          "SMarkCompiler.%(cores)s 50"="Compiler", 
+                          "SMarkLoops.benchFloatLoop.%(cores)s 9"="Float Loop (1 proc per core)",
+                          "SMarkLoops.benchFloatLoop.%(cores)s0 5"="Float Loop (10 procs per core)",
+                          "SMarkLoops.benchIntLoop.%(cores)s0 5"="Int Loop (10 procs per core)",
+                          "BenchmarkGameSuite.benchChameleons.None"="Chameleons")
+}
+
+custom_scale <- function(theFactor) {
+  factor_levels <- levels(theFactor)
+  structure(1:length(factor_levels), names=factor_levels)
+}
+
+### Work with the Data
+
+confInterval095Error <- function (samples) {
+  if (length(sample) < 30)
+    qnorm(0.975) * sd(samples) / sqrt(length(samples))
+  else
+    qt(0.975, df=length(samples)-1) * sd(samples) / sqrt(length(samples))
+  }
+  
+drop_unused_factors <- function (dataSet) {
+  dataSet[] <- lapply(dataSet, function(x) if (is.factor(x)) factor(x) else x)
+  dataSet
+}
+
