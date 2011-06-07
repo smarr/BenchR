@@ -1,45 +1,25 @@
-# make sure the required library is loaded
-library(doBy)
-library(ggplot2)
-
 # Read in the benchmark data
 
-# REM: the row names are hard coded and could have changed
-rowNames <- c("Time", "Benchmark", "VirtualMachine", "Platform", "ExtraArguments", "Cores", "Iterations", "None", "Criterion")
+source("~/Projects/PhD/IBM/notes/scheduling-issue/helper.R")
 
-bench <- rbind(read.table("~/Projects/PhD/IBM/notes/scheduling-issue/osx.data.csv",    sep="\t", header=FALSE, col.names=rowNames),
-               read.table("~/Projects/PhD/IBM/notes/scheduling-issue/ubuntu.data.csv", sep="\t", header=FALSE, col.names=rowNames),
-               read.table("~/Projects/PhD/IBM/notes/scheduling-issue/tilera.data.csv", sep="\t", header=FALSE, col.names=rowNames))
+# Make sure Cores and Iterations are treated as a factors
+## cores <- range(bench$Cores)
+## allPossibleCores <- cores[1]:cores[2]
+#bench$Cores <- factor(bench$Cores, ordered=TRUE)  ## disabled to have better scale on diagrams, should be used as actual integer value
+#bench$Iterations <- factor(bench$Iterations, ordered=TRUE)
 
-# Some helpers
-confInterval095Error <- function (samples) {
-  if (length(sample) < 30)
-    qnorm(0.975) * sd(samples) / sqrt(length(samples))
-  else
-    qt(0.975, df=length(samples)-1) * sd(samples) / sqrt(length(samples))
-  }
+bench <- load_data()
 
 # Separate Data for display
 
 # TOOD: do the statistics on the data, get the mean, median, stddev, conf-interval for each
 #       benchmark
-norm_bench <- ddply(bench, ~Benchmark + VirtualMachine + Platform + ExtraArguments + None + Criterion,
+norm_bench <- ddply(bench, ~ Benchmark + VirtualMachine + Platform + ExtraArguments + None + Criterion,
          transform,
          Time.norm = Time / Time[Cores == min(Cores)])
 
-# Prepare some readable/shorter names for the plots, hope we can map that somehow
-bench_names = data.frame( "BenchmarkGameSuite.benchFasta.%(cores)s 1 15000"="Fasta",
-                          "BenchmarkGameSuite.benchNBody.%(cores)s 1 4000" = "NBody", 
-                          "BenchmarkGameSuite.benchFannkuchRedux.%(cores)s 1 7"="FannkuchRedux",
-                          "BenchmarkGameSuite.benchBinaryTrees.%(cores)s 1 9" = "BinaryTrees", 
-                          "SMarkLoops.benchIntLoop.%(cores)s 30"="Int Loop (1 proc per core)",
-                          "SMarkCompiler.%(cores)s 50"="Compiler", 
-                          "SMarkLoops.benchFloatLoop.%(cores)s 9"="Float Loop (1 proc per core)",
-                          "SMarkLoops.benchFloatLoop.%(cores)s0 5"="Float Loop (10 procs per core)",
-                          "SMarkLoops.benchIntLoop.%(cores)s0 5"="Int Loop (10 procs per core)",
-                          "BenchmarkGameSuite.benchChameleons.None"="Chameleons")
 
-stats <- ddply(norm_bench, ~Benchmark + VirtualMachine + Platform + ExtraArguments + Cores + None + Criterion,
+stats <- ddply(norm_bench, ~ Benchmark + VirtualMachine + Platform + ExtraArguments + Cores + None + Criterion,
          summarise,
          Time.mean=mean(Time),
          Time.stddev=sd(Time),
@@ -59,8 +39,113 @@ stats <- ddply(norm_bench, ~Benchmark + VirtualMachine + Platform + ExtraArgumen
 
 ###splittedStats <- splitBy(formula = ~ Benchmark + Virtual.Machine + Platform + Extra.Arguments + None, data = stats)
 
+## Which info do we want to get out of the data
+### Specific
+###   - does the thread-local stuff have any influence?
+###    -> compare rvm-intel-8u to rvm-intel-8u-tl
+###   - scheduler bottleneck
+###    -> compare int/float loop benchs with many and few processes, look at Chameleons benchmark
+### General Performance
+###  - do we have weak scaling? how does the  cores/(work/time) factor develop? ()
+###  - how to present that best? how to show the different platforms?
+###  - redo usual Excel graphs first
+
+
+### Thread-local Experiment
+# prepare data
+threadlocal_bench <- subset(bench, VirtualMachine == "rvm-intel-8u" | VirtualMachine == "rvm-intel-8u-tl")
+tl_speedup <- ddply(threadlocal_bench, ~ Benchmark + Cores + Platform + ExtraArguments + None + Criterion,
+         transform,
+         Time.speed = Time / Time[VirtualMachine == "rvm-intel-8u"])
+
+stats <- ddply(tl_speedup, ~ Benchmark + VirtualMachine + Platform + ExtraArguments + Cores + None + Criterion,
+         summarise,
+         Time.mean=mean(Time.speed),
+         Time.stddev=sd(Time.speed),
+         Time.median=median(Time.speed),
+         Time.mean095Error=confInterval095Error(Time.speed),
+         Time.cnfIntHigh = mean(Time.speed) + (confInterval095Error(Time.speed)),
+         Time.cnfIntLow = mean(Time.speed) - (confInterval095Error(Time.speed)),
+         BId = interaction(Benchmark[1], ExtraArguments[1], VirtualMachine[1], drop=TRUE))
+
+# filter out baseline
+stats <- subset(stats, VirtualMachine == "rvm-intel-8u-tl")
+
+# drop unused factor levels
+stats <- dropUnusedFactors(stats)
+
+
+
+## experiment with a plot for the tl experiment
+p <- ggplot(stats, aes(Cores,
+                       Time.mean,
+                       group = BId,
+                       colour = BId)) +
+     geom_line(size = 1)     
+p
+
+# Now the scheduler bottleneck
+###    -> compare int/float loop benchs with many and few processes, look at Chameleons benchmark
+scheduler_bench <- subset(bench, 
+                          (VirtualMachine == "rvm-intel-8u" | VirtualMachine == "rvm-tilera")
+                          & (Benchmark == "SMarkLoops.benchFloatLoop" | Benchmark == "SMarkLoops.benchIntLoop" |
+                             Benchmark == "BenchmarkGameSuite.benchChameleons"))
+#tl_speedup <- ddply(threadlocal_bench, ~ Benchmark + Cores + Platform + ExtraArguments + None + Criterion,
+#         transform,
+#         Time.speed = Time / Time[VirtualMachine == "rvm-intel-8u"])
+
+stats <- ddply(scheduler_bench, ~ Benchmark + VirtualMachine + Platform + ExtraArguments + Cores + None + Criterion,
+         summarise,
+         Time.mean=mean(Time),
+         Time.stddev=sd(Time),
+         Time.median=median(Time),
+         Time.mean095Error=confInterval095Error(Time),
+         Time.cnfIntHigh = mean(Time) + (confInterval095Error(Time)),
+         Time.cnfIntLow = mean(Time) - (confInterval095Error(Time)),
+         BId = interaction(Benchmark[1], ExtraArguments[1], VirtualMachine[1], drop=TRUE))
+
+stats_8u <- dropUnusedFactors( subset(stats, VirtualMachine == "rvm-intel-8u") )
+stats_tilera <- dropUnusedFactors( subset(stats, VirtualMachine == "rvm-intel-8u") )
+
+p <- ggplot(stats_8u, aes(Cores,
+                       Time.mean,
+                       group = BId,
+                       colour = BId)) +
+     geom_line(size = 1) +
+     geom_errorbar(aes(ymin=Time.cnfIntLow, ymax = Time.cnfIntHigh)) +
+     geom_point(aes(shape=factor(BId), size=4)) +
+     scale_shape_manual("",values=c("BenchmarkGameSuite.benchChameleons.None.rvm-intel-8u"=1,
+                                    "BenchmarkGameSuite.benchChameleons.None.rvm-tilera"=2,
+                                    "SMarkLoops.benchFloatLoop.%(cores)s 9.rvm-intel-8u"=3,
+                                    "SMarkLoops.benchFloatLoop.%(cores)s0 5.rvm-intel-8u"=4,
+                                    "SMarkLoops.benchFloatLoop.%(cores)s 1.rvm-tilera"=5,
+                                    "SMarkLoops.benchFloatLoop.%(cores)s0 1.rvm-tilera"=6,
+                                    "SMarkLoops.benchIntLoop.%(cores)s 30.rvm-intel-8u"=7,
+                                    "SMarkLoops.benchIntLoop.%(cores)s0 5.rvm-intel-8u"=8,
+                                    "SMarkLoops.benchIntLoop.%(cores)s 3.rvm-tilera"=9,
+                                    "SMarkLoops.benchIntLoop.%(cores)s0 1.rvm-tilera"=10    )) +
+    scale_colour_manual("",values=c("BenchmarkGameSuite.benchChameleons.None.rvm-intel-8u"=1,
+                                    "BenchmarkGameSuite.benchChameleons.None.rvm-tilera"=2,
+                                    "SMarkLoops.benchFloatLoop.%(cores)s 9.rvm-intel-8u"=3,
+                                    "SMarkLoops.benchFloatLoop.%(cores)s0 5.rvm-intel-8u"=4,
+                                    "SMarkLoops.benchFloatLoop.%(cores)s 1.rvm-tilera"=5,
+                                    "SMarkLoops.benchFloatLoop.%(cores)s0 1.rvm-tilera"=6,
+                                    "SMarkLoops.benchIntLoop.%(cores)s 30.rvm-intel-8u"=7,
+                                    "SMarkLoops.benchIntLoop.%(cores)s0 5.rvm-intel-8u"=8,
+                                    "SMarkLoops.benchIntLoop.%(cores)s 3.rvm-tilera"=9,
+                                    "SMarkLoops.benchIntLoop.%(cores)s0 1.rvm-tilera"=10    ))
+p
+
+# filter to first 16 cores
+stats <- subset(stats, Cores <= 16)
+
+# drop unused factor levels
+stats[] <- lapply(stats, function(x) if (is.factor(x)) factor(x) else x)
+
+
+
 # Get some basic infos for the plot
-xrange <- range(stats$Cores)
+xrange <- 1:16
 yrange <- range(stats$Time.mean, stats$Time.cnfIntHigh, stats$Time.cnfIntLow)
 nbench <- length(levels(stats$BId)) ##length(splittedStats)
 
