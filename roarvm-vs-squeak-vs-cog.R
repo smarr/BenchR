@@ -26,7 +26,7 @@ p <- ggplot(compiler_bench, aes(Cores, Time.mean, group = VirtualMachine, colour
 p <- p + geom_line(size = 1)
 p <- p + geom_errorbar(aes(ymin=Time.cnfIntLow, ymax = Time.cnfIntHigh))
 p <- p + geom_point(aes(shape=VirtualMachine, size=4))
-p <- p + xlab("Cores") + ylab("Runtime")
+p <- p + xlab("#WorkUnits and #Cores") + ylab("Runtime")
 p <- p + opts(title="Compiler Benchmark for Weak-Scaling #Work==#Cores")
 p <- p + scale_x_continuous(breaks=1:16)
 p
