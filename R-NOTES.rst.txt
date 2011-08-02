@@ -28,6 +28,10 @@ More packages:
 
 install.packages("doBy", repos = "http://cran.r-project.org/")
 install.packages("ggplot2")
+install.packages("R.oo")
+install.packages("stringr")
+library(R.oo)
+library("stringr")
 
 library(ggplot2)  # for line graphs with error bars
 

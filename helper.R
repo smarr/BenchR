@@ -3,10 +3,24 @@
 # make sure the required library is loaded
 library(doBy)
 library(ggplot2)
+library(R.oo)
+library("stringr")
 
 # define helper functions
 
 ### Load Data
+
+
+load_data_file <- function (file) {
+  # REM: the row names are hard coded and could have changed
+  rowNames <- c("Time", "Benchmark", "VirtualMachine", "Platform",
+                "ExtraArguments", "Cores", "Iterations", "None", "Criterion")
+
+  bench <- rbind(read.table(file,
+                            sep="\t", header=FALSE, col.names=rowNames))
+  bench
+}
+ 
 
 load_data <- function () {
   # REM: the row names are hard coded and could have changed

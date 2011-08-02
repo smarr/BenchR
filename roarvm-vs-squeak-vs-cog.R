@@ -34,7 +34,7 @@ ggsave(filename="~/Projects/PhD/IBM/notes/scheduling-issue/compiler-cog-roar-squ
 
 
 
-## versiob with facet_grid
+## version with facet_grid
 compiler_bench <- drop_unused_factors(subset(stats, 
               (VirtualMachine == "rvm-intel-8u" | VirtualMachine == "cog-vm" | VirtualMachine == "squeak-vm")
               & !((Benchmark == "SMarkLoops.benchFloatLoop") & (ExtraArguments == "%(cores)s 9"))
