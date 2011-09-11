@@ -1,8 +1,88 @@
-### Generate the Weak-Scaling Graphs for Intel + TILEPro64
-source("~/Projects/PhD/IBM/notes/scheduling-issue/helper.R")
+#!/usr/bin/env Rscript
 
-bench <- load_data_file("~/Projects/PhD/IBM/notes/scheduling-issue/object_table.data.csv")
-#bench <- load_data_file("~/Projects/PhD/IBM/notes/scheduling-issue/new-scheduler.data.csv")
+### Analyse the impact of the use of an object table and extra object header
+### words on multicore performance
+
+# set working directory and load libraries
+setwd("~/Projects/BenchR/")
+source("libs/helper.R")
+
+row_names <- c("Time", "Benchmark", "VirtualMachine", "Platform",
+                  "ExtraArguments", "Cores", "Iterations", "None", "Criterion", "Criterion-total")
+bench <- load_data_file("~/Projects/PhD/IBM/bench-ot/results.data.csv", row_names)
+
+# Questions to be answered:
+#  1. What is the performance impact of using an object table?
+#     -> relevant data: *-noOT-full-header vs. *-OT-full-header
+#                   and *-noOT-half-header vs. *-OT-half-header
+#     - does the number of header words influence it?
+#     - is it specific to benchmarks?
+#  2. What is the performance impact of adding header words?
+#     -> relevant data: *-noOT-full-header vs. *-noOT-half-header vs. *-noOT-no-header
+#                   and *-OT-full-header vs. *-OT-half-header
+
+### Some general preprocessing
+
+# Parse the data for better handling
+# - separate by OT and noOT, and by header chracteristics
+bench <- ddply(bench, ~ VirtualMachine,
+               transform,
+               ObjectTable = strsplit(as.character(VirtualMachine), "-")[[1]][2] == "OT",
+               Header = factor(strsplit(as.character(VirtualMachine), "-")[[1]][3]))
+
+### !!! Remove all subcriteria, currently that is for the NPBIS benchmark only anyway
+bench <- subset(bench, Criterion == "total")
+
+# We only care about a subset of the variables, the rest contains nothing interesting
+bench <- subset(bench, select=c(Time, Platform, ObjectTable, Header,
+                                Benchmark, ExtraArguments, Cores))
+
+# We assume that all variations in measurements come from the same
+# non-deterministic influences.
+# This allows to order the measurements, before corelating them pair-wise.
+bench <- orderBy(~Time + Platform + ObjectTable + Header + Benchmark + ExtraArguments + Cores, bench)
+
+# Now on to question 1
+ot_data <- subset(bench, Header != "no")
+
+# Calculate the performance ratio
+norm_ot_data <- ddply(ot_data, ~ Platform + Header + Benchmark + ExtraArguments + Cores,
+      transform,
+      SpeedRatio = Time / Time[ObjectTable == TRUE])
+# Now just drop all the stuff we do not need
+norm_ot_data <- subset(norm_ot_data, ObjectTable == FALSE, c(SpeedRatio, Platform, Header, Benchmark, ExtraArguments, Cores))
+norm_ot_data <- drop_unused_factors(norm_ot_data)
+
+pdf(file="Cores1-full-header-OTimpact.pdf", width=40, height=20)
+
+beanplot(SpeedRatio ~ Cores + Header,
+         data = norm_ot_data,
+         what = c(1,1,1,0),
+         #main="Performance Comparison",
+         log="", # don't use log-scale
+         ylab="Runtime: noOT/OT",
+         #cutmin=0.8, # allows to cut off outliers, but more like lying...
+         #cutmax=1.2,
+         #ylim=c(0.95, 1.05),
+         las=2,
+         #par(mgp=c(3,2,0)),
+         ignored_variable="at_the_end")
+dev.off()
+
+beanplot(SpeedRatio ~ Benchmark,
+         data = subset(norm_ot_data, Cores == 1 & Header == "half"),
+         what = c(1,1,1,0),
+         #main="Performance Comparison",
+         log="", # don't use log-scale
+         ylab="Runtime: VMADL/handcrafted",
+         #cutmin=0.8, # allows to cut off outliers, but more like lying...
+         #cutmax=1.2,
+         #ylim=c(0.95, 1.05),
+         las=2,
+         #par(mgp=c(3,2,0)),
+         ignored_variable="at_the_end")
+
+die-here  ###---->>> below old script
 
 # TODO: - look at data from 1-core only, bar chart?
 #         and 8 cores only
