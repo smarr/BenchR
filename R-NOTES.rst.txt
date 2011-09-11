@@ -30,7 +30,12 @@ install.packages("doBy", repos = "http://cran.r-project.org/")
 install.packages("ggplot2")
 install.packages("R.oo")
 install.packages("stringr")
+install.packages("psych") # for geometric.mean
+install.packages("vioplot")
+
+
 library(R.oo)
+library(vioplot)
 library("stringr")
 
 library(ggplot2)  # for line graphs with error bars
