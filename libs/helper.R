@@ -65,3 +65,13 @@ drop_unused_factors <- function (dataSet) {
   dataSet
 }
 
+map_names <- function(old_names, name_map) {
+  for (i in 1:length(old_names)) {
+    old_name <- old_names[i]
+    if (!is.null(name_map[[old_name]])) {
+      old_names[i] <- name_map[[old_name]]
+    }
+  }
+  old_names
+}
+
