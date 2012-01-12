@@ -1,15 +1,4 @@
 ## Provides Helper functions for standard problems with my benchmarking data
-
-# make sure the required library is loaded
-library(doBy)
-library(ggplot2)
-library(R.oo)
-library(stringr)
-library(psych)
-library(beanplot)
-library(vioplot)
-library(fields)
-
 # define helper functions
 
 ### Load Data
