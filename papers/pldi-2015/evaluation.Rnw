@@ -1,0 +1,571 @@
+%!TEX root = zero-overhead-reflection.tex
+
+\section{Evaluation}
+
+To assess whether the use of dispatch chains is sufficient to remove the
+runtime overhead of metaprogramming, we evaluate the performance of a Smalltalk
+extended with the OMOP (cf. \cref{sec:omop}), measure the performance impact on
+JRuby and the psd.rb image processing library, and examine the native code
+generated for reflective operations and dynamic proxies. The evaluation focuses
+on the peak performance, \ie, stable state performance for a given benchmark.
+
+\subsection{SOM Smalltalk and JRuby+Truffle}
+\label{sec:eval-experiments}
+
+% \smtodo{perhaps a diagram showing SOMpe and SOMmt as RTruffleSOM and TruffleSOM in their technological context
+% this would also make sure that people see the stack of tech used...}
+
+For our experiments, we rely on SOM, a Smalltalk designed for teaching and
+research on VM techniques\,\citep{SOMFamily}, and
+JRuby+Truffle\,\citep{Seaton:2014:DFS}, a Ruby implementation for the JVM that
+leverages the Truffle framework to outperform the other Ruby implementations.
+
+\paragraph{SOM: Simple Object Machine.}
+
+SOM is designed to avoid inessential complexity, but includes fundamental
+language concepts such as \emph{objects}, \emph{classes}, \emph{closures},
+and \emph{non-local returns}. In Smalltalk tradition,
+control structures such as \py{if} or \py{while} are defined as polymorphic
+methods on objects and rely on \emph{closures} and \emph{non-local returns}.
+For the experiments it also implements common reflective operations such as
+method invocation and field access, as well as the OMOP.
+
+
+% \smtodo{for the smalltalk experts: make the set of supported reflective operations explicit}
+% \smtodo{for final version add urls and real names}
+
+To cover meta-tracing as well as partial evaluation as JIT compilation
+techniques, we use two SOM implementations. \SOMmt is implemented in RPython
+and the corresponding tool-chain generates a JIT compiler based on
+meta-tracing. \SOMpe is implemented in Java on top of the Truffle framework and
+the Graal compiler with its partial evaluation approach. Both are
+self-optimizing interpreters and reach performance of the same order of
+magnitude as Java on top of the HotSpot JVM\,\citep{marr2014there}, and thus,
+are suitable to assess the performance of runtime metaprogramming.
+
+% \smtodo{do we need to talk about this?}
+%
+% % -> additionally, there is so-called \emph{eager specialization} for certain
+% %   safe operations in place
+% % -> the OMOP is only applied on objects with an identity
+% %   -> immutable values without identity are not generally considered to
+% %      be subject to the OMOP \smtodo{perhaps that needs to be motivated in the omop section: concurrency}
+% %   -> gives rise to optimizations on booleans, integers, blocks, and others
+% %      -> no control structures in the language, if-specializtions, loop specializations
+%
+% In addition, constructs such as \stcode{#ifTrue:ifFalse:} and loops such as
+% \stcode{#whileTrue:} or \stcode{#to:do:} are \emph{eagerly} specialized. The
+% OMOP allows to treat booleans and integers as immutable values without object
+% identity. Thus, Smalltalk message sends for control structures do not need to
+% be reified, which avoids indirections in performance critical constructs. This
+% optimization is necessary at least for \SOMpe because the partial evaluation
+% can otherwise reach thresholds, for instance for the number of nodes in a data
+% flow graph, which prevent it from more aggressive inlining and optimization.
+% \sm{end}
+
+\paragraph{JRuby+Truffle.}
+
+Since SOM is rather academic, we also investigate the performance
+potential in the context of JRuby+Truffle, which aims to be a fully compliant
+Ruby implementation, and thus is significantly more complex. Being part of the
+JRuby code base, it is comparable with other industrial-strength language
+implementations from the perspective of complexity. On a set of numerical
+and semi-numerical benchmarks, JRuby+Truffle outperforms Ruby 2.1 and other
+Ruby implementations on most benchmarks, often by more than an order of 
+magnitude.\footnote{Please see the supplement material with the performance numbers for JRuby+Truffle.}
+
+To gain performance that is of the same order of magnitude as Java,
+JRuby+Truffle uses Truffle and self-optimization for instance to type-specialize basic
+operations such as arithmetics and comparisons\,\citep{TruffleDSL:2014},
+to optimize object field access\,\citep{Woss:2014:OSM}, or to remove the overhead
+of debugging related functionality\,\citep{Seaton:2014:DFS}.
+
+Similar to other dynamic languages such as Smalltalk, it offers a wide range of
+metaprogramming facilities including reflective method invocation with
+\stcode{#send}, checks whether a method is implemented with
+\stcode{#respond_to?}, and \stcode{#method_missing} to handle the case that a
+method is not implemented. These operations are optimized with dispatch chains
+based on the approach discussed in \cref{sec:zero-overhead}.
+
+\subsection{Methodology}
+\label{sec:eval-methodology}
+
+To account for the non-determinism in modern systems as well as the adaptive
+compilation techniques in RPython and Truffle combined with Graal and HotSpot,
+each reported result is based on at least 100 measurements after a steady state has been reached.
+To determine when a steady state is reached, each benchmark is executed between
+350 and 500 times within the same VM instance. The steady state is determined
+informally by examining plots of the measurements for each benchmark and
+selecting a suitable range of measurements that does not show signs of compilation.
+
+The same approach was used for the PyPy results reported in \cref{sec:sota},
+while the Java results were determined using \citeurl{JMH,}{JMH is a Java harness
+for building, running, and analyzing micro benchmarks}{OpenJDK}{28 August
+2014}{http://openjdk.java.net/projects/code-tools/jmh/} which reports the
+number of operations per second after warmup. The reported result is an average
+over 100 reported measurements.
+
+The benchmark machine used has two quad-core Intel Xeons E5520, 2.26\,GHz with
+8\,GB of memory and runs Ubuntu Linux with kernel 3.11, PyPy 2.3.1, and Java
+1.8.0\_11 with HotSpot 25.11-b03.
+
+<<setup, echo=FALSE, include=FALSE>>=
+if (Sys.getenv("RSTUDIO") == "1") { setwd("/Users/smarr/Projects/PostDoc/ZERO-MOP/paper/"); options(latexcmd = "/opt/local/bin/pdflatex") }
+
+# load libraries, the data, and prepare it
+source("scripts/init.R", chdir=TRUE)
+knit_hooks$set(document = function(x) {
+  gsub('(\\\\input\\{.*?\\})[\n]+', '\\1%\n', x) 
+})
+opts_chunk$set(
+    dev='tikz',
+    #dev='pdf',
+    echo=FALSE,
+    external=FALSE,
+    tidy=FALSE)
+@
+
+
+<<plot-helper>>=
+simple_boxplot <- function(data_set, vm, x = "Benchmark", y = "Value") {
+  data_vm <- droplevels(subset(data_set, VM == vm))
+  
+  p <- ggplot(data_vm, aes_string(x=x, y=y))
+  #p <- p + ggtitle(vm)
+  p + geom_boxplot(outlier.size = 0.9) + theme_simple()
+}
+@
+
+\subsection{Performance of an Unrestricted Metaobject Protocol}
+
+One of the main goals of this work is to make unrestricted metaobject
+protocols such as the OMOP (cf. \cref{sec:omop}) efficient. Thus, despite the
+ability to change metaobjects, \ie, the language semantics of base-level
+objects at runtime, the cost to change semantics of field accesses or method
+invocations should be reduced to the cost of the involved base-level operations
+and avoid any overhead for the involved metaobject handlers and reflection.
+
+As explained in \cref{sec:omop-opt}, we speculate on the metaobject of a
+base-level object staying the same to be able to eliminate overhead of
+reflection and the involved metaobject handlers. In the evaluation, we want to
+assess the overhead in the best-case scenario that the metaobject does not
+change so that we can see the impact of the residual guards and checks on the
+peak performance.
+
+\paragraph{Overhead for Metaprogramming.}
+
+To assess the scenario where the OMOP is used to change the language's
+behavior, we measure the runtime overhead on simple microbenchmarks. In each of
+them, one aspect of the language's behavior is changed for a selected object. Thus,
+either method dispatch, field read, field write, reading a global value, or
+executing a primitive function provided by the interpreter. To see whether any
+unnecessary overhead remains, the changed behavior increments the result of, \eg,
+the field read operation simply by adding one. The baseline
+benchmark for the comparison does the same operations, \ie, a field read and
+adding one executes without triggering the MOP. Thus, the benchmarks measure the
+cost of moving a base-level operation to the meta level. Ideally, this does not
+incur any cost even so that it requires calling the metaobject's handlers and
+doing the customized operation reflectively.
+
+\begin{figure}%[b!]
+\centering
+<<omop-micro, fig.width=2.4, fig.height=2.2, fig.show='asis', strip.white=TRUE>>=
+# Ignore Dispatch, DispatchEnforced and DispatchEnforcedStd are the proper benchmarks
+omop <- droplevels(subset(data, Suite == "omop" & Benchmark != "Dispatch" & Iteration > 50))
+
+omop <- ddply(omop, ~ Benchmark + VM + Suite, transform,
+               Var = grepl("Enforced$", Benchmark),
+               Benchmark = gsub("(Enforced)|(Std)", "", Benchmark))
+omop$Benchmark <- factor(omop$Benchmark)
+
+rtruffle <- "RTruffleSOM (OMOP)"
+truffle  <- "TruffleSOM.ns (OMOP)"
+
+## Boxplot with all benchmarks, only the enforced version, normalized, and shown around 1.0 line
+norm_omop <- ddply(omop, ~ Benchmark + VM + Suite, transform,
+                   RuntimeRatio = Value / geometric.mean(Value[Var == FALSE]))
+norm_omop_enforced <- droplevels(subset(norm_omop, Var == TRUE & (VM == rtruffle | VM == truffle) & Benchmark != "Dispatch"))
+
+# Rename
+levels(norm_omop_enforced$VM) <- map_names(levels(norm_omop_enforced$VM),
+                                           list("RTruffleSOM (OMOP)" = "SOM[MT]",
+                                                "TruffleSOM.ns (OMOP)"  = "SOM[PE]"))
+
+levels(norm_omop_enforced$Benchmark) <- map_names(levels(norm_omop_enforced$Benchmark),
+                                           list("AddDispatch"   = "dispatch",
+                                                "AddFieldWrite" = "field write",
+                                                "FieldRead"     = "field read",
+                                                "GlobalRead"    = "global read",
+                                                "ReqPrim"       = "exec. primitive"))
+
+p <- ggplot(norm_omop_enforced, aes(x = Benchmark, y = RuntimeRatio))
+p <- p + facet_grid(~VM, labeller = label_parsed)
+p <- p + geom_hline(yintercept = 1, linetype = "dashed")
+p <- p + geom_boxplot(outlier.size = 0.9) + theme_simple()
+p <- p + scale_y_continuous(name="Runtime normalized to\nrun without OMOP") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5),
+        panel.border = element_rect(colour = "black", fill = NA))
+p
+@
+\caption{Microbenchmarks to assess the OMOP's overhead}
+\label{fig:omop-micro}
+\end{figure}
+
+
+
+\Cref{fig:omop-micro} shows the measured results as boxplots indicating median, 25th, and 75th percentiles. Measurement
+errors aside, the results show that moving between base and meta level does not
+incur any overhead, and thus, dispatch chains are sufficient to optimize MOPs
+as dynamic as the OMOP.
+
+On \SOMmt the benchmark for field writes sticks out. An analysis of the
+resulting traces shows that the optimizer was able to remove the overhead of
+the reflective operations as in the other microbenchmarks. The differences
+are another type of guard and a different type of add instruction being used.
+However, the overall number of guards and operations is identical, but on the
+used hardware, the selected instructions have different performance. We
+attribute that to the fact that RPython's backend does currently not take the
+different cost of instructions into account. For the other benchmarks, RPython
+as well as Graal produce the same machine code. The only difference are in memory
+offsets. Ignoring the anomaly, we conclude that the proposed optimizations are
+sufficient on top of meta-tracing as well as partial evaluation to enable the
+optimizers to remove the reflective overhead and minimize the necessary runtime
+guards.
+
+Note, compared to the experiment with PyPy, which showed an overhead of
+\pypyOmopOverheadP (cf. \cref{sec:sota}), our approach eliminates the overhead
+completely.
+
+\paragraph{Inherent Overhead.}
+
+%% \smtodo{relate to related work, is this the same experiment as the one in the 90ies?}
+%% \sm{well, this is unfortunately not really the same, and they show that they have zero overhead :(, I essentially show less here, because I do not use the metalevel to do something useful. \todo{might need to do that for a revision}}
+
+\begin{figure*}
+\centering
+<<inherent-overhead, fig.width=5, fig.height=2.1, fig.show='hold'>>=
+#micro <- droplevels(subset(data, Suite == "micro-steady-omop" & Iteration >= 210 & Iteration <= 340 & Benchmark != "Sieve" & Benchmark != "Queens"))
+micro <- droplevels(subset(data, 
+            ((Suite == "micro-steady-omop" & Iteration >= 210 & Iteration <= 340 & Benchmark != "TreeSort" & Benchmark != "Fannkuch") |
+            (Suite == "micro-steady-omop" & Iteration >= 210 + 200 & Iteration <= 340 + 200 & Benchmark == "TreeSort") |
+            (Suite == "micro-steady-omop" & Iteration >= 210 - 150 & Iteration <= 340 - 150 & Benchmark == "Fannkuch")) & Benchmark != "Sieve" & Benchmark != "Queens"))
+
+macro <- droplevels(subset(data, Suite == "macro-steady-omop" & Iteration >= 600 & Iteration <= 990))
+omop <- rbind(micro, macro)
+
+rtruffle <- "RTruffleSOM (OMOP)"
+truffle  <- "TruffleSOM.os (OMOP)"
+
+norm_omop <- ddply(omop, ~ Benchmark + VM + Suite, transform,
+                   RuntimeRatio = Value / geometric.mean(Value[Var == "false"]))
+norm_omop_enforced <- droplevels(subset(norm_omop, Var == "true" & (VM == rtruffle | VM == truffle)))
+
+levels(norm_omop_enforced$VM) <- map_names(levels(norm_omop_enforced$VM),
+                                           list("RTruffleSOM (OMOP)" = "SOM[MT]",
+                                                "TruffleSOM.os (OMOP)"  = "SOM[PE]"))
+
+p <- ggplot(norm_omop_enforced, aes(x = Benchmark, y = RuntimeRatio))
+p <- p + facet_grid(~VM, labeller = label_parsed)
+p <- p + geom_hline(yintercept = 1, linetype = "dashed")
+p <- p + geom_boxplot(outlier.size = 0.9) + theme_simple()
+p <- p + scale_y_continuous(name="Runtime normalized to\nrun without OMOP") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5),
+        panel.border = element_rect(colour = "black", fill = NA))
+p
+
+@
+\caption{Overhead of running benchmarks with the OMOP, but without changing language behavior.}
+\label{fig:inherent-overhead}
+\end{figure*}
+
+
+While we were able to show that moving operations from the base level to the
+meta level does not incur any overhead, the question remains what the inherent
+overhead for the support of the OMOP is. Since metaobjects can change at
+runtime, some guards need to remain in the program to ensure the correct
+semantics of the OMOP. To measure the inherent overhead these guards cause, we
+assess the runtime impact on benchmarks that are executed with the OMOP but
+without using it to change the language's behavior. Thus, we assess whether the
+proposed optimizations are sufficient to remove the overhead of metaoperations
+and minimization of guards. We use 22 benchmarks. DeltaBlue and Richards have been used by various VM
+implementers to represent polymorphic object-oriented programs. Mandelbrot and NBody
+measure whether the optimizer can reduce object-oriented programs to the basic
+numerical operations. The other benchmarks are kernels that stress a wide range
+of VM aspects such as garbage collection, string performance, data movement, as
+well as basic language features such as method invocation, loop constructs, and
+recursion.
+
+
+<<inherent-overhead-data, results='asis'>>=
+tdata <- droplevels(subset(norm_omop, Var == "true" & (VM == rtruffle | VM == truffle)))
+# levels(tdata$VM)  <- map_names(levels(tdata$VM),
+#                                list("RTruffleSOM (OMOP)"   = "RTruffleSOM",
+#                                     "TruffleSOM.os (OMOP)" = "TruffleSOM"))
+# t <- tabular(Justify(l,data=l)*Benchmark ~ Format(digits=1)*Heading('Runtime Ratio')*VM*Heading()*RuntimeRatio*Justify(data=r)*(Heading('mean')*geometric.mean + sd),  data=tdata)
+#latex(t)
+
+stats <- ddply(tdata, ~ Benchmark + VM,
+               summarise,
+               RR.mean                 = mean(RuntimeRatio),
+               RR.geomean              = geometric.mean(RuntimeRatio),
+               RR.stddev               = sd(RuntimeRatio),
+               RR.median               = median(RuntimeRatio),
+               max = max(RuntimeRatio),
+               min = min(RuntimeRatio))
+overall <- ddply(stats, ~ VM,
+               summarise,
+               mean                 = mean(RR.geomean),
+               geomean              = geometric.mean(RR.geomean),
+               stddev               = sd(RR.geomean),
+               median               = median(RR.geomean),
+               max = max(RR.geomean),
+               min = min(RR.geomean))
+rtruffle_mean <- overall[overall$VM==rtruffle,]$geomean
+rtruffle_min  <- overall[overall$VM==rtruffle,]$min
+rtruffle_max  <- overall[overall$VM==rtruffle,]$max
+truffle_mean  <- overall[overall$VM==truffle, ]$geomean
+truffle_min   <- overall[overall$VM==truffle, ]$min
+truffle_max   <- overall[overall$VM==truffle, ]$max
+
+per <- function (val) { round((val * 100) - 100, digits=1) }
+@
+
+
+\Cref{fig:inherent-overhead} shows that in practice there is an overhead to
+ensure the OMOPs semantics, \ie, possibly changing metaobjects at runtime. On
+average, the overhead is \(\Sexpr{per(rtruffle_mean)}\%\) (min.
+\(\Sexpr{per(rtruffle_min)}\%\), max. \(\Sexpr{per(rtruffle_max)}\%\)) on
+\SOMmt and \(\Sexpr{per(truffle_mean)}\%\) (min.
+\(\Sexpr{per(truffle_min)}\%\), max. \(\Sexpr{per(truffle_max)}\%\)) on \SOMpe.
+
+Smaller benchmarks are generally as fast as their versions running without the
+OMOP. Larger benchmarks such as DeltaBlue and Richards exhibit about \(10\mbox{--}25\%\) runtime overhead, which
+comes solely from remaining guards. All overhead such as extra allocations for
+reflective argument passing is removed. In case reflective overhead would
+remain, it be at least in the range of \(5\mbox{--}10\)x.
+
+To conclude, dispatch chains are sufficient to remove the overhead of
+reflective operations completely. For MOPs such as the OMOP, there can be a
+small inherent runtime cost, since removing the remaining guards would
+compromise its correctness.
+
+\subsection{Performance Benefits for JRuby+Truffle}
+
+%% american english spelling please, to be consistent everywhere
+
+To evaluate the impact of optimized dispatch chains on real code used in
+production applications, we measure the impact of using dispatch chains to
+optimize reflective operations in JRuby+Truffle. We use 18 image composition
+kernels from the psd.rb library as benchmarks. The compose operations that
+produce a single color value from multiple inputs are key for performance as
+they are run for every pixel in an image, and in psd.rb these are implemented
+using multiple metaprogramming operations. Following the Ruby philosophy of
+choosing convenient implementations over creating extra abstraction with
+classes, the library developers chose to pass the name of the composition
+operation as an argument, which is then used by the reflective method invocation
+\rbcode{#send}. Within each composition operation, color value manipulation
+methods are called that are not part of the object. These are caught via
+\rbcode{#method_missing}, filtered with \rbcode{#respond_to?} and delegated with
+\rbcode{#send}, in a form of ad\,hoc modularity. In an extreme case for each
+pixel in the image there are 7 calls to \rbcode{#send} and 6 each to
+\rbcode{#method_missing} and \rbcode{#respond_to?}. Although this structure may
+not be optimal for other implementations of Ruby, and could be alternatively
+expressed using existing tools for modularity, this is the code that the psd.rb
+developers found was most clear for their purpose and it is common for Ruby
+programs.
+
+To assess the benefit of the optimization, the benchmarks compare the
+performance with and without the use of dispatch chains. Thus, we assess the
+effectiveness of the optimization in the context of complex interactions of
+reflective operations on real code. Without the optimization, the optimizer
+is not able to cache method lookups and inline method calls to enable further
+optimizations.
+
+\Cref{fig:jruby-kernel} shows that using dispatch chains gives between \(10\)x
+and \(20\)x speedup over unoptimized calls. Thus, they give a significant
+performance benefit without requiring the developer to change the
+implementation style or to use native extensions.
+
+<<jruby-kernel, fig.width=3.2, fig.height=2.6, fig.show='hold', fig.cap="Speedup on psd.rb image composition kernels from optimizing reflective operations.", fig.lp='fig:'>>=
+# Ignore Dispatch, DispatchEnforced and DispatchEnforcedStd are the proper benchmarks
+ruby <- droplevels(subset(data, Suite == "ruby-image-libs" & Iteration > 10))
+# summary(ruby)
+
+## Boxplot with all benchmarks, only the enforced version, normalized, and shown around 1.0 line
+norm_ruby <- ddply(ruby, ~ Benchmark + Suite, transform,
+                   SpeedUp = geometric.mean(Value[VM == "JRuby-meta-uncached"]) / Value)
+norm_opt  <- droplevels(subset(norm_ruby, VM == "JRuby"))
+
+p <- simple_boxplot(norm_opt, "JRuby", y = "SpeedUp")
+p <- p + scale_y_continuous(limits=c(9.8,20), name="Speedup over unoptimized\n(higher is better)") + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5))
+p
+
+# norm_cruby <- ddply(ruby, ~ Benchmark + Suite, transform,
+#                     SpeedUp = geometric.mean(Value[VM == "Ruby"]) / Value)
+# 
+# stats <- ddply(norm_cruby, ~ Benchmark + VM,
+#                summarise,
+#                SU.geomean              = geometric.mean(SpeedUp))
+# #                SU.stddev               = sd(SpeedUp),
+# #                SU.median               = median(SpeedUp),
+# #                max = max(SpeedUp),
+# #                min = min(SpeedUp)
+#                )
+@
+
+\subsection{Compilation of Reflection and Dynamic Proxies}
+
+Finally, we investigate the compilation result for
+the use of reflective operations and compare it with the result for the direct
+operations. To assess the results for meta-tracing as well as partial
+evaluation, we use microbenchmarks on top of \SOMmt and \SOMpe. The
+microbenchmarks use a counter object that implements a \code{increment} method
+to increment an integer. The baseline for comparison calls \code{increment}
+directly. The \java{PerformAdd} benchmark calls the increment method
+reflectively. For \java{DnuAdd} the counter does not implement \code{increment}
+and instead uses SOM's missing-method handler (\stcode{#doesNotUnderstand:}) to
+do the integer increment. \java{DnuPerformAdd} combines missing-method
+handling with a reflective method call. The \java{ProxyAdd} benchmark
+combines missing-method handling with reflective calls to assess the
+overhead of dynamic proxies built with it.
+
+
+% To assess the overhead of reflective operations, we focus on reflective
+% method invocation and support for not implemented methods in form of
+% . We compare microbenchmarks for each of the four
+% relevant cases, \ie, direct method invocation (\java{DirectAdd}), reflective
+% invocation (\java{PerformAdd}), intercepted invocation followed by a direct
+% invocation (\java{DnuAdd}), and intercepted invocation followed by a reflective
+% invocation (\java{DnuPerformAdd}). These microbenchmarks are using the
+% \stcode{Calculator} class given in \cref{lst:calculator}. Note, the
+% \stcode{#inc:} method takes a parameter and tests its value. We chose to
+% include this in all benchmarks since the \stcode{#doesNotUnderstand:} handler
+% needs to allocate an extra argument array for this case, which needs to be
+% optimized out. The \stcode{#doesNotUnderstand:} method on \cref{l:dnu}
+% implements the case for the direct invocation. For the \java{DnuPerformAdd}
+% microbenchmark, we use another implementation that uses \stcode{#perform:}
+% instead.
+
+
+
+% Calculator = (  | a | "class with field a"
+%   a = ( ^ a )         "accessor for a"
+%   initialize: anInt = ( a := anInt )
+%   inc: aSymbol = (
+%     aSymbol = #once ifTrue: [ a := a + 1 ] )
+%   doesNotUnderstand: selector arguments: arr = ( (@\label{l:dnu}@)
+%     ^ self inc: #once
+%   )
+% )
+
+% \begin{lstlisting}[language={[small]PseudoLang},
+%                    float={t!},
+%                    caption={Calculator class used for microbenchmarks.},
+%                    numbers=left, numberstyle=\tiny, numbersep=8pt,
+%                    label={lst:calculator}]
+% class Calculator {
+%   int a := 0;
+%   fn getA()        { return a; }
+%   fn initialize(a) { this.a := a }
+%   fn inc(symbol) {
+%     if (symbol == 'once) { a++; }
+%   }
+%   fn methodMissing(selector, argArray) { (@\label{l:dnu}@)
+%     return this.inc('once);
+%   }
+% }
+% \end{lstlisting}
+
+% For the assessment of the overhead of proxies, the setup is very similar and
+% uses a \stcode{Calculator} object as subject for the proxy. To compare the
+% overhead of dynamic proxies with the classic proxy
+% % \,\citep{gamma:1995}, referene not really necessary
+% pattern, we implement proxies once based on \stcode{#doesNotUnderstand} and
+% \stcode{#perform:} resulting in the \stcode{ProxyAdd} microbenchmark and once
+% by implementing a \stcode{#inc:} method that simply delegates to the subject
+% object by invoking \stcode{#inc:} directly. Considering only the involved
+% reflective operations, \stcode{DnuPerformAdd} and \stcode{ProxyAdd} are the
+% same. The only difference is the additional object involved. We included both
+% versions to make sure that the dynamic proxies benchmark is close
+% to the Java one from \cref{sec:sota}.
+
+
+\begin{figure}%[b!]
+\centering
+<<simple-metaprogramming-metatracing, fig.width=1.9, fig.height=2.1, fig.show='asis', strip.white=TRUE>>=
+rtruffle <- "RTruffleSOM"
+truffle  <- "TruffleSOM.os"
+
+refl <- droplevels(subset(data, Suite == "reflection" & (VM == rtruffle | VM == truffle) & Iteration >= 50 & Iteration <= 130))
+prox <- droplevels(subset(data, Suite == "proxy"      & (VM == rtruffle | VM == truffle) & Iteration >= 50 & Iteration <= 130))
+
+norm_refl <- ddply(refl, ~ VM + Suite, transform,
+                   RuntimeRatio = Value / geometric.mean(Value[Benchmark == "DirectAdd"]))
+norm_prox <- ddply(prox, ~ VM + Suite, transform,
+                   RuntimeRatio = Value / geometric.mean(Value[Benchmark == "IndirectAdd"]))
+
+norm_both <- rbind(norm_refl, norm_prox)
+levels(norm_both$VM) <- map_names(levels(norm_both$VM),
+                                  list("RTruffleSOM"    = "SOM[MT]",
+                                       "TruffleSOM.os"  = "SOM[PE]"))
+
+# Show only the reflective version
+norm_both <- droplevels(subset(norm_both, Benchmark != "DirectAdd" & Benchmark != "IndirectAdd"))
+
+p <- ggplot(norm_both, aes(x = Benchmark, y = RuntimeRatio))
+p <- p + facet_grid(~VM, labeller = label_parsed)
+p <- p + geom_hline(yintercept = 1, linetype = "dashed")
+p <- p + geom_boxplot(outlier.size = 0.9) + theme_simple()
+p <- p + scale_y_continuous(name="Runtime normalized to\nnon-reflective operation") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5),
+        panel.border = element_rect(colour = "black", fill = NA))
+p
+@
+\caption{Performance of using reflective operations and proxies.}
+\label{fig:simple-metaprogramming}
+\end{figure}
+
+For each of these benchmarks, we assessed the generated machine code for \SOMmt
+as well as \SOMpe. In either case, the compilation results for each of the
+benchmarks is identical to the non-reflective counter part, leaving memory
+offsets aside. Thus, the generated instructions are the same and the optimizers
+were able to completely remove the overhead of reflection. Neither reflective
+method invocation nor missing-method handling with its additional allocation of
+arrays for argument passing resulted in additional machine code instructions.
+Thus, we conclude that the dispatch chains expose the essential information to
+the optimizers that enable them to generate the same machine code they generate
+for non-reflective operations. The performance measurements of the benchmarks
+are depicted in \cref{fig:simple-metaprogramming} as boxplots. The expected
+result is that these benchmarks perform identical to their non-reflective
+counter parts and thus results are on the \(1\)-line. Since the machine code is
+identical, we attribute the measured difference to memory offset differences,
+measurement inaccuracies, garbage collection, and other influences outside of
+our experimental control.
+
+
+% <<proxies, fig.width=1.1, fig.height=2.5, fig.show='hold', fig.cap="Performance of dynamic proxies.", fig.lp='fig:'>>=
+% refl <- subset(data, Suite == "proxy" & Iteration > 50)
+% refl <- droplevels(refl)
+%
+% p <- simple_boxplot(refl, "RTruffleSOM")
+% p <- p + ggtitle(expression(SOM[MT])) + scale_y_continuous(name="Runtime in ms") + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5))
+% p
+%
+% p <- simple_boxplot(refl, "TruffleSOM.os")
+% p <- p + ggtitle(expression(SOM[PE])) + scale_y_continuous(name="Runtime in ms") + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5))
+% p
+%
+% @
+
+% Old proxy text
+% \Cref{fig:proxies} show the measured results of these two microbenchmarks.
+% Again, an inspection of the resulting traces for RPython and the assembly code
+% generated by HotSpot are identical for both benchmarks, demonstrating that the
+% optimizations reach the set goal. The measured runtime are again not identical,
+% but arguably within an error margin that is explainable by effects outside
+% of the control of our experiments.
+%
+% \here
+% Note, the difference between the proxy benchmarks and the previous reflective
+% benchmarks is minimal and we include
+
