@@ -1,0 +1,1196 @@
+%!TEX root = ../compare-trace-eval.tex
+
+\section{Comparing Tracing and Partial Evaluation}
+\label{sec:perf-eval}
+
+Before discussing the results of the comparisons, we detail the methodology
+used to obtain and assess the performance and give a brief
+characterization of the used benchmarks.
+
+\subsection{Methodology}
+\label{sec:eval-methodology}
+
+With the non-determinism in modern systems, JIT compilation, and
+garbage collection, we need to account for the influence of variables outside
+of our control. Thus, we execute each benchmark at least 500 times within the
+same VM instance. This guarantees that we have
+at least 100 continuous measurements for assessing steady state performance.
+The steady state is determined informally by examining plots of the 
+measurements for each benchmark to confirm that the last 100 measurements
+do not show signs of compilation.
+
+The benchmarks are executed on a system with two quad-core Intel Xeons E5520
+processors at 2.26\,GHz with 8\,GB of memory and runs Ubuntu Linux with kernel
+3.11, PyPy 2.4-dev, and Java 1.8.0\_11 with HotSpot 25.11-b03.
+
+%% TODO-LATER: update this date on acceptance...
+
+\paragraphDot{Measurement Setup}
+
+Pure interpretation performance for \SOMmt is measured with executables without meta-tracing support. Similarly, we measure the pure
+interpretation performance of \SOMpe on Hotspot without the partial evaluation
+and compilation support of Truffle. Thus, in both cases, there is no additional
+overhead, \eg, for compiler related bookkeeping. However, \SOMpe still benefits
+from the HotSpot's normal Java JIT compilation, while \SOMmt is a simple
+interpreter executing directly without any underlying JIT compilation. We chose
+this setup to avoid measuring overhead from the meta-JIT compiler
+infrastructure and focus on the interpreter-related optimizations. Since we
+report results after warmup, the results for \SOMpe and \SOMmt represent the
+ideal interpreter performance in both cases.
+
+\Cref{fig:exp-setup} depicts the setup for the measurements including only the
+elements that are relevant for the interpreter or peak performance.
+
+\begin{figure}
+  \centering
+  \includegraphics[width=\linewidth]{figures/exp-setup.pdf}
+  \caption{Experimental setup for interpreted as well as compiled, \ie, peak performance measurements.}
+  \label{fig:exp-setup}
+\end{figure}
+
+For measuring the peak performance, we enable meta-compilation in both cases.
+Thus, execution starts first in the interpreter, and
+after completing a warmup phase, the benchmarks execute solely in
+optimized native code. To assess the capability of the used meta-compilation
+approach, we report only the measurements after warmup is completed, \ie, ideal
+peak performance. For this experiment, Truffle is configured to avoid parallel compilation
+to be more comparable with RPython, which does not have any parallel execution.
+Furthermore, for peak performance measurements, \SOMpe uses a minimum heap size of 2GB
+to reduce noise from the GC. Still, measurement errors for \SOMpe are generally
+higher than for \SOMmt,
+because the JVM performs various operations in parallel and the operating system
+can reschedule the benchmark thread on other cores. RPython's runtime system on the other hand is
+completely sequential and is therefore less exposed to rescheduling, which leads to lower measurement errors.
+
+For measuring whole program and warmup behavior in \cref{sec:perf-whole-prog},
+the VMs use their standard unchanged garbage collection settings and Truffle
+uses parallel compilation. We chose to rely for the experiments on the
+standard settings to reflect the experience a normal user would have, assuming
+that the parameters are tuned for a wide range of applications. We use the same
+settings for determining the memory usage in \cref{sec:perf-mem-usage}.
+
+\paragraphDot{Benchmark Suite}
+
+The used benchmarks cover various aspects of VMs. DeltaBlue and Richards test
+among other things how well polymorphic method invocations are optimized.
+Json is a parser benchmark measuring string operations
+and object creation. PageRank and GraphSearch traverse large data structures
+of objects and arrays. Mandelbrot and n-body are classic numerical ones
+focusing on floating point performance. Fannkuch,
+n-queens, sieve of Eratosthenes, array permutations, bubble sort, and quick
+sort measure array access and logical operations. The storage benchmark is a
+stress test for garbage collectors. A few microbenchmarks test the performance,
+\eg, of loops, field access, and integer addition. While these benchmarks are
+comparably small and cannot compete with application benchmark suites such as
+DaCapo\,\citep{blackburn2006dacapo}, they test a relevant range of features and
+indicate the order of magnitude the discussed optimizations have on
+interpretation and peak performance.
+
+\paragraphDot{Assessing Optimization Impact}
+
+As in classic compilers, optimizations interact with each other, and
+varying the order in which they are applied can have significant implications
+on the observed gains they provide. To minimize the impact of these interdependencies,
+we assess the optimizations by comparing against a \emph{baseline}
+that includes all optimizations. Thus, the obtained results indicate the gain
+of a specific optimization for the scenario where all the other optimizations
+have been applied already. While this might lead to underestimating the value of
+an optimization for gradually improving the performance of a system, we think
+it reflects more accurately the expected gains in optimized systems.
+
+\subsection{Impact on Interpreter}
+\label{sec:eval-interp}
+
+Before assessing the impact of the meta-compilation approach, we discuss the
+optimization's impact on interpretation performance.
+
+<<setup, echo=FALSE, include=FALSE, cache=TRUE>>=
+if (Sys.getenv("RSTUDIO") == "1") { setwd("/Users/smarr/Projects/PostDoc/COMPARE-TRACE-EVAL/sections/") }
+
+source("../scripts/config.R", chdir=TRUE)
+data_file = "../data/benchmark.data.bz2"
+source("../evaluation/scripts/init.R", chdir=TRUE)
+@
+
+<<knitr-settings, echo=FALSE, include=FALSE, cache=FALSE>>=
+knit_hooks$set(document = function(x) {
+  y <- gsub('(\\\\input\\{.*?\\})[\n]+', '\\1%\n', x) 
+  z <- gsub("KKSOMmtKK", "\\\\SOMmt", y)
+  gsub("KKSOMpeKK", "\\\\SOMpe", z)
+})
+
+opts_chunk$set(
+    fig.path="figures/",
+    dev=c('tikz', 'svg'),
+    dev.args=list(pointsize=10),
+    #dev='pdf',
+    echo=FALSE,
+    external=FALSE,
+    tidy=FALSE)
+@
+
+<<data-preparation-interp, include=FALSE, cache=TRUE>>=
+# Interpreter warms up fast, 25 is very conservative.
+stabilized <- subset(data, Iteration >= 25 & !grepl("Java", VM))
+stats <- ddply(stabilized, ~ Benchmark + VM + Suite + Var + Cores + Extra,
+               summarise,
+               Time.geomean              = geometric.mean(Value),
+               Time.stddev               = sd(Value),
+               Time.median               = median(Value),
+               max = max(Value),
+               min = min(Value))
+norm <- ddply(stats, ~ Benchmark + VM + Suite + Cores + Extra, transform,
+              RuntimeRatio = Time.geomean / Time.geomean[Var == "baseline"])
+vms <- ddply(norm, ~ VM + Var,
+             summarise,
+             RunRatio.geomean = geometric.mean(RuntimeRatio),
+             min = min(RuntimeRatio),
+             max = max(RuntimeRatio))
+
+fixed_geomean <- function (x) { 
+  #cat(x)
+  m <- geometric.mean(x + 1)
+  #cat("----")
+  #cat(m)
+  #cat("----")
+  m - 1
+}
+@
+
+
+<<interpreter-optimization-SOMmt, fig.cap="Impact of optimizations on \\SOMmt's interpreter performance. Experiments are ordered by geometric mean of the speedup over all benchmarks, compared to the baseline. Each dot represents a benchmark. The red vertical bar indicates the geometric mean. The results show that the optimization for minimizing escaping variables slows the interpreter down. Inline caching and lowering of library functionality give substantial benefits.", fig.lp='fig:', fig.width=3.3, fig.height=1.7, cache=TRUE>>=
+add_hlines <- function (plot, yintercepts) {
+  for (i in yintercepts) {
+    ltype <- ifelse(i == 1, "dashed", "dotted")
+    plot <- plot + geom_hline(aes_string(yintercept = i), colour="#cccccc", linetype=ltype)
+  }
+  plot
+}
+
+point_benchmark_plot <- function (plot) {
+  plot + stat_summary(fun.y = fixed_geomean, geom = "point", size = 4, shape = 73, colour = "#a40000") + #"#777777"
+  geom_jitter(size=0.8, position = position_jitter(width = .2, height = 0))
+}
+
+rt_norm <- droplevels(subset(norm, VM == "RTruffleSOM-interp-experiments" & Var != "minimal"))
+plot <- ggplot(rt_norm, aes(x=reorder(Var, RuntimeRatio, FUN=function (x) -geometric.mean(x)), Var, y=RuntimeRatio))
+plot <- add_hlines(plot, c(0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 2, 2.5, 3, 4, 5))
+plot <- point_benchmark_plot(plot) +
+  scale_y_log10(breaks=c(0.7, 0.8, 0.9, 1, 1.2, 1.5, 2, 3, 4, 5, 6, 7, 8)) +
+  coord_flip() + ylab("Speedup Factor\n(higher is better, logarithmic scale)") +
+  theme_simple() +
+  theme(axis.text.x  = element_text(size = 7, lineheight=1, angle=90, vjust=0.5),
+        axis.title.x = element_text(size = 9),
+        axis.title.y = element_blank())
+  plot
+
+## Perpare statistics for text
+rt_var <- droplevels(subset(vms, VM == "RTruffleSOM-interp-experiments"))
+
+per      <- function (val) { round((val * 100) - 100, digits=1) }
+per_over <- function (val) { round((val * 100), digits=1) }
+
+fact  <- function (val) { round(val, digits=1) }
+mev_p <- -1.0 * per(rt_var[rt_var$Var== "min. escaping vars",]$RunRatio.geomean)
+tf_p  <- -1.0 * per(rt_var[rt_var$Var== "typed fields",]$RunRatio.geomean)
+
+lc_gm_x <- fact(rt_var[rt_var$Var== "lower control structures",]$RunRatio.geomean)
+lc_min_p <- per(rt_var[rt_var$Var== "lower control structures",]$min)
+lc_max_x <- fact(rt_var[rt_var$Var== "lower control structures",]$max)
+
+cg_gm_p <- per(rt_var[rt_var$Var== "cache globals",]$RunRatio.geomean)
+ic_gm_p <- per(rt_var[rt_var$Var== "inline caching",]$RunRatio.geomean)
+as_gm_p <- per(rt_var[rt_var$Var== "array strategies",]$RunRatio.geomean)
+
+mec_gm_p  <- per(rt_var[rt_var$Var== "min. escaping closures",]$RunRatio.geomean)
+mec_min_p <- per(rt_var[rt_var$Var== "min. escaping closures",]$min)
+mec_max_p <- per(rt_var[rt_var$Var== "min. escaping closures",]$max)
+
+olv_gm_p  <- per(rt_var[rt_var$Var== "opt. local vars",]$RunRatio.geomean)
+crn_gm_p  <- per(rt_var[rt_var$Var== "catch-return nodes",]$RunRatio.geomean)
+@
+
+\Cref{fig:interpreter-optimization-SOMmt} depicts for each of the
+optimizations the benchmark results as separate points representing the
+average speedup over the baseline version of \SOMmt. All dots on the right of the
+\(1\)-line indicate speedup, while all dots left of the line indicate slowdowns.
+Furthermore, the optimizations are ordered by the geometric mean over all
+benchmarks, which is indicated for each optimization with a red bar.
+Based on this ordering, all optimizations listed above the baseline cause on average
+a slowdown, while all optimizations listed below the baseline result in a speedup.
+Note, the x-axis uses a logarithmic scale.
+
+The optimization for minimizing escaping of variables causes on average a slowdown
+of \(\Sexpr{mev_p}\%\). This is not surprising, since the interpreter has to
+allocate additional data structures for each method call
+and the optimization can only benefit the JIT compiler.
+Similarly, typed fields cause a slowdown of \(\Sexpr{tf_p}\%\).
+Since \SOMmt uses uniform boxing, the interpreter creates the object after
+reading from a field, and thus, the optimization is not beneficial. Instead,
+the added complexity of the type-specialization nodes causes a slowdown.
+The optimizations to separate catch-return nodes (\(\Sexpr{crn_gm_p}\%\)),
+minimizing escaping of closures (\(\Sexpr{mec_gm_p}\%\)), and the extra
+nodes for accessing local variables (\(\Sexpr{olv_gm_p}\%\)) do not make a
+significant difference for the interpreter's performance. 
+The dynamic optimizations for caching the association object of globals
+(\(\Sexpr{cg_gm_p}\%\)) and array strategies (\(\Sexpr{as_gm_p}\%\)) do not
+provide a significant improvement either.
+
+The remaining optimizations more clearly
+improve the interpreter performance of \SOMmt.
+The largest gains for interpreter performance come from the lowering of control
+structures. Here we see an average gain of \(\Sexpr{lc_gm_x}\)x (min. \(\Sexpr{lc_min_p}\%\), max. \(\Sexpr{lc_max_x}\)x).
+This is expected because their implementation in the standard
+library rely on polymorphic method invocations and the loop implementations
+all map onto the basic \py{while} loop in the
+interpreter. Especially for \py{for}-loops, the runtime overhead is much smaller
+when they are implemented directly in the interpreter because it avoids
+multiple method invocations and the counting is done in RPython instead of
+requiring language-level operations.
+Inline caching for methods and blocks (\(\Sexpr{ic_gm_p}\%\)) gives
+also significant speedup based on runtime feedback.
+
+<<interpreter-optimization-SOMpe, fig.cap="\\SOMpe optimization impact on interpreter performance. Type-based specialization introduce overhead. Lowering of library functionality and direct inlining of basic operations on the AST-level are highly beneficial.", fig.lp='fig:', fig.width=3.3, fig.height=1.9, cache=TRUE>>=
+t_norm <- droplevels(subset(norm, VM == "TruffleSOM-interp-experiments" & Var != "minimal"))
+plot <- ggplot(t_norm, aes(x=reorder(Var, RuntimeRatio, FUN=function (x) -geometric.mean(x)), Var, y=RuntimeRatio))
+plot <- add_hlines(plot, c(0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 2, 3, 4, 5))
+plot <- point_benchmark_plot(plot) +
+  scale_y_log10(breaks=c(0.6, 0.7, 0.8, 1, 1.2, 1.5, 2, 3, 4, 5, 6, 7, 8)) +
+  coord_flip() + ylab("Speedup Factor\n(higher is better, logarithmic scale)") +
+  theme_simple() + 
+  theme(axis.text.x  = element_text(size = 7, lineheight=0.7, angle=90, vjust=0.5),
+        axis.title.x = element_text(size = 9),
+        axis.title.y = element_blank())
+  plot
+
+t_var <- droplevels(subset(vms, VM == "TruffleSOM-interp-experiments"))
+ta_gm_po <- -1.0 * per(t_var[t_var$Var== "typed args",]$RunRatio.geomean)
+tv_gm_po <- -1.0 * per(t_var[t_var$Var== "typed vars",]$RunRatio.geomean)
+tf_gm_po  <- -1.0 * per(t_var[t_var$Var== "typed fields",]$RunRatio.geomean)
+tf_min_po <- -1.0 * per(t_var[t_var$Var== "typed fields",]$min)
+tf_max_p  <- per(t_var[t_var$Var== "typed fields",]$max)
+
+mec_gm_p  <- per(t_var[t_var$Var== "min. escaping closures",]$RunRatio.geomean)
+cg_gm_p   <- per(t_var[t_var$Var== "cache globals",]$RunRatio.geomean)
+ic_gm_p   <- per(t_var[t_var$Var== "inline caching",]$RunRatio.geomean)
+olv_gm_p   <- per(t_var[t_var$Var== "opt. local vars",]$RunRatio.geomean)
+ibo_gm_x <- fact(t_var[t_var$Var== "inline basic ops.",]$RunRatio.geomean)
+
+as_gm_p  <- per(t_var[t_var$Var== "array strategies",]$RunRatio.geomean)
+as_min_p <- per(t_var[t_var$Var== "array strategies",]$min)
+as_max_p <- per(t_var[t_var$Var== "array strategies",]$max)
+
+lco_gm_x <- fact(t_var[t_var$Var== "lower common ops",]$RunRatio.geomean)
+lcs_gm_x <- fact(t_var[t_var$Var== "lower control structures",]$RunRatio.geomean)
+@
+
+For \SOMpe, \cref{fig:interpreter-optimization-SOMpe} shows that the complexity 
+introduced for
+the type-related specializations leads to overhead during interpretation.
+The typed arguments optimization makes the interpreter on average \(\Sexpr{ta_gm_po}\%\)
+slower. For typed variables, we see \(\Sexpr{tv_gm_po}\%\) overhead.
+Thus, if only interpreter speed is relevant, these optimizations are better
+left out. For typed object fields, the picture is less clear. On average,
+they cause a slowdown of \(\Sexpr{tf_gm_po}\%\), but range from \(\Sexpr{tf_min_po}\%\)
+slowdown to \(\Sexpr{tf_max_p}\%\) speedup.
+%% Doesn't fit in anymore, I think, because the speedup is so small
+% The largest speedup is on the BubbleSort benchmark, which only stores two
+% integers in object fields. These integers represent the largest and smallest
+% values found in arrays. Here the main benefit comes from the interplay of
+% optimizations, which enable reading of these fields and then using them for
+% direct integer comparisons without boxing and unboxing or additional dynamic
+% type checks. However, on most other benchmarks and especially object-oriented
+% ones, the type specializations cause overhead because they require additional
+% AST nodes, which slow the interpreter down.
+The effect for \SOMpe is more positive than for \SOMmt because of
+the differences in boxing, but overall the optimization is not
+beneficial for interpreted execution.
+
+Caching of globals (\(\Sexpr{cg_gm_p}\%\)), optimizing access to local variables
+(\(\Sexpr{olv_gm_p}\%\)), and inline caching
+(\(\Sexpr{ic_gm_p}\%\)) give only minimal average speedups for the interpreter.
+The low gains from inline caching are somewhat surprising. However, \SOMmt did
+not inline basic operations as \SOMpe does. Thus, we assume that inlining of
+basic operations, which gives in itself a major speedup of
+\(\Sexpr{ibo_gm_x}\)x, hides the gains that inline caching of blocks and
+methods gives on an interpreter without it.
+
+Array strategies give a speedup of \(\Sexpr{as_gm_p}\%\) (min. \(\Sexpr{as_min_p}\%\),
+max. \(\Sexpr{as_max_p}\%\)) and is with the different boxing strategy of
+\SOMpe more beneficial for the interpreter.
+Similar to \SOMmt,  lowering library functionality to the interpreter
+level gives large improvements. Lowering common operations gives an average
+speedup of \(\Sexpr{lco_gm_x}\)x and lowering control structures gives
+\(\Sexpr{lcs_gm_x}\)x, confirming the usefulness of these optimizations for
+interpreters in general.
+
+\subsection{Peak Performance}
+\label{sec:eval-peak-perf}
+
+While some of the studied optimizations improve interpreted
+performance significantly, others cause slowdowns. However,
+especially the ones causing slowdowns are meant to improve peak performance
+for the meta-compilation with tracing or partial evaluation.
+
+\paragraphDot{Meta-Tracing}
+
+<<data-preparation-jit-rtruffle, include=FALSE, cache=TRUE>>=
+# Interpreter warms up fast, 25 is very conservative.
+stabilized <- subset(data, ((Benchmark == "DeltaBlue" | Benchmark == "QuickSort") & Iteration >= 900 & Iteration <= 1000) | (Benchmark != "DeltaBlue" & Benchmark != "QuickSort" & Iteration >= 400 & Iteration <= 500))
+stats <- ddply(subset(stabilized, VM != "Java" & VM != "Java-interp"), ~ Benchmark + VM + Suite + Var + Cores + Extra,
+               summarise,
+               Time.geomean              = geometric.mean(Value),
+               Time.stddev               = sd(Value),
+               Time.median               = median(Value),
+               max = max(Value),
+               min = min(Value))
+norm <- ddply(stats, ~ Benchmark + VM + Suite + Cores + Extra, transform,
+              RuntimeRatio = Time.geomean / Time.geomean[Var == "baseline"])
+@
+
+<<peak-optimization-SOMmt, fig.cap="\\SOMmt optimization impact on peak performance. Most optimizations do not affect average performance. Only lowering of library functionality gives substantial performance gains.", fig.lp='fig:', fig.width=3.3, fig.height=1.7, cache=TRUE>>=
+rt_norm <- subset(norm, VM == "RTruffleSOM-jit-experiments" & Var != "minimal")
+rt_norm <- subset(rt_norm, Var != "min. escaping vars" | Benchmark != "Towers")  ## Towers benchmark behaves on latest RPython very strange for 'min. escaping vars', looks like RPython figures out some extra optimization all of a sudden, this is something that creeped in only on the latest RPython code, so, will discard this results for now, until we figure out, why this optimization does not apply in general.
+
+vms <- ddply(rt_norm, ~ VM + Var,
+             summarise,
+             RunRatio.geomean = geometric.mean(RuntimeRatio),
+             min = min(RuntimeRatio),
+             max = max(RuntimeRatio))
+
+rt_norm_outliers   <- subset(rt_norm, RuntimeRatio >= 2)
+
+plot <- ggplot(rt_norm, aes(x=reorder(Var, RuntimeRatio, FUN=function (x) -geometric.mean(x)), Var, y=RuntimeRatio))
+plot <- add_hlines(plot, c(0.95, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.75, 2, 2.2))
+plot <- point_benchmark_plot(plot) +
+  coord_flip(ylim = c(.89, 2.4)) +
+  ylab("Speedup Factor\n(higher is better, logarithmic scale)") +
+  theme_simple() +
+  theme(axis.text.x  = element_text(size = 7, lineheight=1, angle=90, vjust=0.5),
+        axis.title.x = element_text(size = 9),
+        axis.title.y = element_blank()) +
+  scale_y_log10(breaks=c(0.8, 0.9, 0.95, 1, 1.2, 1.5, 1.75, 1.9, 2, 2.2))
+plot
+
+## Prepare statistics for text
+rt_var <- droplevels(subset(vms, VM == "RTruffleSOM-jit-experiments"))
+
+olv_gm_p <- per(rt_var[rt_var$Var== "opt. local vars",]$RunRatio.geomean)
+ic_gm_p   <- per(rt_var[rt_var$Var== "inline caching",]$RunRatio.geomean)
+
+mev_gm_p  <- per(rt_var[rt_var$Var== "min. escaping vars",]$RunRatio.geomean)
+
+mev_min_po <- -1.0 * per(rt_var[rt_var$Var== "min. escaping vars",]$min)
+mev_max_p <- per(rt_var[rt_var$Var== "min. escaping vars",]$max)
+mec_gm_p  <- per(rt_var[rt_var$Var== "min. escaping closures",]$RunRatio.geomean)
+mec_min_po <- -1.0 * per(rt_var[rt_var$Var== "min. escaping closures",]$min)
+mec_max_p <- per(rt_var[rt_var$Var== "min. escaping closures",]$max)
+
+as_gm_p  <- per(rt_var[rt_var$Var== "array strategies",]$RunRatio.geomean)
+as_min_p <- per(rt_var[rt_var$Var== "array strategies",]$min)
+as_max_p <- per(rt_var[rt_var$Var== "array strategies",]$max)
+
+tf_gm_p  <- per(rt_var[rt_var$Var== "typed fields",]$RunRatio.geomean)
+tf_min_p <- per(rt_var[rt_var$Var== "typed fields",]$min)
+tf_max_p <- per(rt_var[rt_var$Var== "typed fields",]$max)
+
+lc_gm_x <- fact(rt_var[rt_var$Var== "lower control structures",]$RunRatio.geomean)
+lc_min_p <- per(rt_var[rt_var$Var== "lower control structures",]$min)
+lc_max_x <- fact(rt_var[rt_var$Var== "lower control structures",]$max)
+
+cg_gm_p  <- per(rt_var[rt_var$Var== "cache globals",]$RunRatio.geomean)
+cg_min_p <- per(rt_var[rt_var$Var== "cache globals",]$min)
+cg_max_p <- per(rt_var[rt_var$Var== "cache globals",]$max)
+
+crn_gm_p  <- per(rt_var[rt_var$Var== "catch-return nodes",]$RunRatio.geomean)
+crn_min_p  <- per(rt_var[rt_var$Var== "catch-return nodes",]$min)
+crn_max_p  <- per(rt_var[rt_var$Var== "catch-return nodes",]$max)
+
+lco_gm_p  <- per(rt_var[rt_var$Var== "lower common ops",]$RunRatio.geomean)
+lco_min_p  <- per(rt_var[rt_var$Var== "lower common ops",]$min)
+lco_max_x  <- fact(rt_var[rt_var$Var== "lower common ops",]$max)
+
+lcs_gm_x  <- fact(rt_var[rt_var$Var== "lower control structures",]$RunRatio.geomean)
+lcs_min_p  <- per(rt_var[rt_var$Var== "lower control structures",]$min)
+lcs_max_x  <- fact(rt_var[rt_var$Var== "lower control structures",]$max)
+@
+
+
+\Cref{fig:peak-optimization-SOMmt} shows the results for \SOMmt with
+meta-tracing enabled. The first noticeable result is that 6 out of 10 optimizations
+have barely any effect on the optimized peak performance.
+The optimizations to 
+cache globals (\(\Sexpr{cg_gm_p}\%\)),
+minimize escaping closures (\(\Sexpr{mec_gm_p}\%\)),
+optimize local variable access (\(\Sexpr{olv_gm_p}\%\)),
+the separate nodes to catch returns (\(\Sexpr{crn_gm_p}\%\)),
+inline caching (\(\Sexpr{ic_gm_p}\%\)), and
+minimize escaping variables (\(\Sexpr{mev_gm_p}\%\))
+affect average performance only minimally.
+
+For the optimization of local variable access and inline caching, this result 
+is expected.
+The trace optimizer eliminate tests on compile-time constants
+and other unnecessary operations. Furthermore, inline caching is only useful 
+for the interpreter, because \SOMmt uses RPython's \py{@elidable}
+(cf. \cref{sec:rpython}) to enable method lookup optimization. 
+The lookup is marked as \py{@elidable} so that the optimizer knows
+its results can be considered runtime constants to avoid lookup overhead.
+
+The optimization to minimize escaping of variables shows variability from a  
+\(\Sexpr{mev_min_po}\%\) slowdown to a to \(\Sexpr{mev_max_p}\%\) speedup. 
+Thus, there is some observable benefit, but overall it is not worth 
+the added complexity, especially since the interpreter performance is 
+significantly reduced.
+
+% The caching of global values shows a speedup of only \(\Sexpr{cg_gm_p}\%\)
+% (min. \(\Sexpr{cg_min_p}\%\), max. \(\Sexpr{cg_max_p}\%\)), which can be
+% explained by \SOMmt's use of RPython's \py{promote()} to tell the optimizer
+% that the association objects for globals are constants, enabling subsequent
+% optimizations (cf. \cref{sec:rpython}).
+
+Array strategies gives an average speedup of \(\Sexpr{as_gm_p}\%\)
+(min. \(\Sexpr{as_min_p}\%\), max. \(\Sexpr{as_max_p}\%\)). The additional
+complexity can have a negative impact, but also gives a significant speedup
+on benchmarks that use integer arrays, \eg, bubble and quick sort. For typed fields, the
+results are similar with an average speedup of \(\Sexpr{tf_gm_p}\%\)
+(min. \(\Sexpr{tf_min_p}\%\), max. \(\Sexpr{tf_max_p}\%\)). For benchmarks
+that use object fields for integers and doubles, we see speedups, while others
+show small slowdowns from the added complexity.
+
+The lowering of library functionality is not only beneficial for the interpreter
+but also for meta-tracing. For common operations, we see a speedup of \(\Sexpr{lco_gm_p}\%\)
+(min. \(\Sexpr{lco_min_p}\%\), max. \(\Sexpr{lco_max_x}\)x). The lowering
+provides two main benefits. On the one hand, the intended functionality is
+expressed more directly in the recorded trace. For instance for simple comparisons
+this can make a significant difference, because instead of building, \eg, a
+\emph{larger or equal} comparison with \emph{smaller than} and negation, the
+direct comparison can be used. When layering abstractions on top of each other,
+these effects accumulate, especially since trace guards might prevent further
+optimizations. On the other hand, lowering typically reduce the number of
+operations that are in a trace and thus need to be optimized. Since
+RPython uses trace length as a criterion for compilation, lowering functionality
+from the library into the interpreter can increase the size of user
+programs that are acceptable for compilation.
+
+For the lowering of control structures, we see a speedup of \(\Sexpr{lcs_gm_x}\)x
+(min. \(\Sexpr{lcs_min_p}\%\), max. \(\Sexpr{lcs_max_x}\)x). These speedups
+are based on the effects for common operations, but also on the additional
+trace merge points introduced for loop constructs. With these merge points,
+we communicate directly to RPython where user-level loops are and thereby
+provide more precise information for compilation.
+
+Generally, we can conclude that only few optimizations have a significant
+positive impact when meta-tracing is used. Specifically, the lowering of
+library functionality into the interpreter helps to expose more details about
+the execution semantics, which enables better optimizations. The typing of fields
+and array strategies are useful, but highly specific to the language usage.
+
+\paragraphDot{Partial Evaluation}
+
+<<peak-optimization-SOMpe, fig.cap="\\SOMpe optimization impact on peak performance. Overall, the impact of optimizations in case of partial evaluation is larger. Lowering of control structures and inline caching are the most beneficial optimizations.", fig.lp='fig:', fig.width=3.3, fig.height=1.9, cache=TRUE>>=
+t_norm <- droplevels(subset(norm, VM == "TruffleSOM-graal-experiments" & Var != "minimal"))
+
+vms <- ddply(t_norm, ~ VM + Var,
+             summarise,
+             RunRatio.geomean = geometric.mean(RuntimeRatio),
+             min = min(RuntimeRatio),
+             max = max(RuntimeRatio))
+
+
+plot <- ggplot(t_norm, aes(x=reorder(Var, RuntimeRatio, FUN=function (x) -geometric.mean(x)), Var, y=RuntimeRatio))
+plot <- add_hlines(plot, c(0.85, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 2, 3, 4, 5, 6, 7, 10, 12))
+plot <- point_benchmark_plot(plot) +
+  scale_y_log10(breaks=c(0.85, 1, 1.2, 1.5, 2, 3, 4, 5, 7, 8, 10, 12)) +  #, limits = c(0.7, 7)
+  ylab("Speedup Factor\n(higher is better, logarithmic scale)") +
+  coord_flip(ylim = c(0.80, 12.7)) +
+  theme_simple() + 
+  theme(axis.text.x  = element_text(size = 7, lineheight=0.7, angle=90, vjust=0.5),
+        axis.title.x = element_text(size = 9),
+        axis.title.y = element_blank())
+plot
+
+## Prepare Statistics for Text
+t_var <- droplevels(subset(vms, VM == "TruffleSOM-graal-experiments"))
+
+mec_gm_p  <-  per(t_var[t_var$Var== "min. escaping closures",]$RunRatio.geomean)
+mec_min_p <-  per(t_var[t_var$Var== "min. escaping closures",]$min)
+mec_max_p  <- per(t_var[t_var$Var== "min. escaping closures",]$max)
+
+olv_gm_p  <- per(t_var[t_var$Var== "opt. local vars",]$RunRatio.geomean)
+olv_min_po  <- -1.0 * per(t_var[t_var$Var== "opt. local vars",]$min)
+olv_max_p  <- per(t_var[t_var$Var== "opt. local vars",]$max)
+
+tv_gm_p  <- per(t_var[t_var$Var== "typed vars",]$RunRatio.geomean)
+tv_min_p <- per(t_var[t_var$Var== "typed vars",]$min)
+tv_max_p <- per(t_var[t_var$Var== "typed vars",]$max)
+
+ta_gm_p  <- per(t_var[t_var$Var== "typed args",]$RunRatio.geomean)
+ta_min_p <-  per(t_var[t_var$Var== "typed args",]$min)
+ta_max_x <- fact(t_var[t_var$Var== "typed args",]$max)
+
+tf_gm_p <- per(t_var[t_var$Var== "typed fields",]$RunRatio.geomean)
+tf_min_p <-  per(t_var[t_var$Var== "typed fields",]$min)
+tf_max_x <- fact(t_var[t_var$Var== "typed fields",]$max)
+
+crn_gm_p <- per(t_var[t_var$Var== "catch-return nodes",]$RunRatio.geomean)
+crn_min_p <- per(t_var[t_var$Var== "catch-return nodes",]$min)
+crn_max_p <- per(t_var[t_var$Var== "catch-return nodes",]$max)
+
+ibo_gm_p <- per(t_var[t_var$Var== "inline basic ops.",]$RunRatio.geomean)
+ibo_min_p <- per(t_var[t_var$Var== "inline basic ops.",]$min)
+ibo_max_x <- fact(t_var[t_var$Var== "inline basic ops.",]$max)
+
+lco_gm_p <- per(t_var[t_var$Var== "lower common ops",]$RunRatio.geomean)
+lco_min_p <- per(t_var[t_var$Var== "lower common ops",]$min)
+lco_max_x <- fact(t_var[t_var$Var== "lower common ops",]$max)
+
+cg_gm_p <- per(t_var[t_var$Var== "cache globals",]$RunRatio.geomean)
+cg_min_p <- per(t_var[t_var$Var== "cache globals",]$min)
+cg_max_x <- fact(t_var[t_var$Var== "cache globals",]$max)
+
+lcs_gm_x <- fact(t_var[t_var$Var== "lower control structures",]$RunRatio.geomean)
+lcs_min_p <- per(t_var[t_var$Var== "lower control structures",]$min)
+lcs_max_x <- fact(t_var[t_var$Var== "lower control structures",]$max)
+
+ic_gm_x <- fact(t_var[t_var$Var== "inline caching",]$RunRatio.geomean)
+ic_min_p <- per(t_var[t_var$Var== "inline caching",]$min)
+ic_max_x <- fact(t_var[t_var$Var== "inline caching",]$max)
+
+as_gm_p  <- per(t_var[t_var$Var== "array strategies",]$RunRatio.geomean)
+as_min_p <- per(t_var[t_var$Var== "array strategies",]$min)
+as_max_x <- fact(t_var[t_var$Var== "array strategies",]$max)
+@
+
+The first observation based on \cref{fig:peak-optimization-SOMpe}
+is that compared to \SOMmt, more of \SOMpe's optimizations have a
+positive effect on performance, which is also larger on average.
+Added catch-return node (\(\Sexpr{crn_gm_p}\%\)),
+typed arguments (\(\Sexpr{ta_gm_p}\%\)),
+minimization of escaping closures (\(\Sexpr{mec_gm_p}\%\))), and
+direct access to variables in local scope (\(\Sexpr{olv_gm_p}\%\)) have only
+insignificant effect on peak performance.
+
+Typed variables give an average speedup of (\(\Sexpr{tv_gm_p}\%\))
+(min. \(\Sexpr{tv_min_p}\%\), max. \(\Sexpr{tv_max_p}\%\)). Thus, there is
+some speedup, however, in most situations partial evaluation is able
+to achieve the same effect without the type specialization.
+
+Inlining of basic operations, which avoids full method calls, \eg, for
+arithmetic operations, shows a speedup of \(\Sexpr{ibo_gm_p}\%\) (min.
+\(\Sexpr{ibo_min_p}\%\), max. \(\Sexpr{ibo_max_x}\)x). It shows that in many
+cases the optimizer is able to remove the overhead of method calls. However,
+the optimization provides significant speedup in other cases as for instance
+complex loop conditions.
+
+Array strategies give a speedup of \(\Sexpr{as_gm_p}\%\) (min.
+\(\Sexpr{as_min_p}\%\), max. \(\Sexpr{as_max_x}\)x), which is comparable to
+the speedup for \SOMmt, but slightly higher.
+
+The lowering of common operations gives an average speedup of \(\Sexpr{lco_gm_p}\%\)
+(min. \(\Sexpr{lco_min_p}\%\), max. \(\Sexpr{lco_max_x}\)x). The results are
+similar to the ones for \SOMmt, indicating the general usefulness of these
+optimization independent of the technique to determine compilation units.
+Furthermore, the benefit of the optimization here is again higher for \SOMpe.
+
+The optimization for object fields improves performance significantly. For the
+\SOMpe interpreter, it was causing a slowdown. With the partial evaluation and
+subsequent compilation however, we see a speedup of \(\Sexpr{tf_gm_p}\%\) (min.
+\(\Sexpr{tf_min_p}\%\), max. \(\Sexpr{tf_max_x}\)x). Thus, typed object fields 
+contribute significantly to the overall peak performance,
+despite their negative impact on interpreter performance. The benefit of typing
+variables and arguments seems to be minimal. Here the optimizer has
+already sufficient information to generate efficient code regardlessly.
+
+The caching of globals gives an average speedup of \(\Sexpr{cg_gm_p}\%\)
+(min. \(\Sexpr{cg_min_p}\%\), max. \(\Sexpr{cg_max_x}\)x). Compared to RPython,
+on Truffle this form of node specialization is the only way to communicate
+runtime constants to the optimizer and as the results show,
+it is important for the overall performance.
+
+Custom inline caching at method call sites and block invocations is the second most
+beneficial optimization. It results on average in a speedup of \(\Sexpr{ic_gm_x}\)x
+(min. \(\Sexpr{ic_min_p}\%\), max. \(\Sexpr{ic_max_x}\)x). On \SOMmt, this
+optimization did not give any improvements because RPython offers annotations
+that communicate the same information to the compiler. With Truffle however,
+inline caching is only done by chaining nodes with the cached data to the call site
+AST node. While tracing intrinsically inlines across methods, Truffle needs
+these caching nodes to see candidates for inlining. Since inlining enables
+many other classic compiler optimizations, it is one of the the most beneficial
+optimizations for \SOMpe.
+
+The lowering of control structures is the most beneficial optimization
+for \SOMpe. It gives an average speedup of \(\Sexpr{lcs_gm_x}\)x
+(min. \(\Sexpr{lcs_min_p}\%\), max. \(\Sexpr{lcs_max_x}\)x). Similar to \SOMmt,
+expressing the semantics of loops and other control flow structures results
+in significant performance improvements. In Truffle, similar to RPython, the
+control structures communicate additional information to the compilation backend.
+In \SOMpe, loops record loop counts to direct the adaptive compilation.
+Similarly, branching
+constructs record branch profiles to enable optimizations based on branch
+probabilities.
+
+\paragraphDot{Conclusion}
+
+Considering all optimizations that are beneficial on average, and show for at
+least one benchmark larger gains, we find that array strategies, typed fields,
+and lowering of common operations and control structures are highly relevant
+for both meta-compilation approaches.
+
+Inline caching and caching of globals is realized with annotations in RPython's
+meta-tracing and thus, does not require the optimizations based on node
+specialization, even so, they are beneficial for the interpreted mode.
+However, with partial evaluation, the node specializations for these two
+optimizations provide significant speedup.
+Inlining of basic operations is beneficial for partial evaluation. While we
+did not apply this optimization to \SOMmt, it is unlikely that it provides
+benefits, since the same result is already achieved with the annotations
+that are used for basic inline caching.
+The typing of variables was also only applied to \SOMpe. Here it improves
+peak performance. For \SOMmt, it might in some cases also improve performance,
+but the added complexity might lead to a result like, \eg, for the minimizing
+of escaping variables, which does not improve peak performance on average.
+
+Thus, overall we conclude that partial evaluation benefits more from the
+optimizations in our experiments by generating higher speedups. Furthermore,
+we conclude that more optimizations are beneficial, because partial evaluation
+cannot provide the same implicit specialization based on runtime information
+that meta-tracing provides implicitly.
+
+\subsection{\SOMmt vs. \SOMpe}
+\label{sec:eval-mtvspe}
+
+\begin{figure*}
+\centering
+<<perf-comp, fig.width=7, fig.height=2.3, fig.show='asis', strip.white=TRUE, cache=TRUE>>=
+base_jit    <- droplevels(subset(stabilized, Var == "baseline" | Var == ""))
+base_interp <- droplevels(subset(data, Iteration >= 25 & (Var == "baseline" | Var == "") & grepl("interp", VM)))
+
+# Exclude microbenchmarks, because neither RPython nor Graal do empty loop detection
+# Exclude List and TreeSort, because we just recently added them, and we don't yet have a full data set for the SOMs
+base_jit_j    <- droplevels(subset(base_jit,    Benchmark != "WhileLoop" & Benchmark != "IntegerLoop" & Benchmark != "FieldLoop" & Benchmark != "List" & Benchmark != "TreeSort"))
+base_interp_j <- droplevels(subset(base_interp, Benchmark != "WhileLoop" & Benchmark != "IntegerLoop" & Benchmark != "FieldLoop" & Benchmark != "List" & Benchmark != "TreeSort"))
+
+norm_jit    <- ddply(base_jit_j, ~ Benchmark, transform,
+              RunRatio = Value / geometric.mean(Value[VM == "Java"]),
+              type = "Compiled")
+norm_interp <- ddply(base_interp_j, ~ Benchmark, transform,
+              RunRatio = Value / geometric.mean(Value[VM == "Java-interp"]),
+              type = "Interpreted")
+
+## make a copy, because we need it later, and do not want those crazy names
+norm_jit_backup    <- norm_jit
+norm_interp_backup <- norm_interp
+
+levels(norm_jit$VM)    <- map_names(levels(norm_jit$VM),
+                                  list("RTruffleSOM-jit-experiments"   = "SOMmt", #"SOM$_{\\textsf{\\scriptsize{MT}}}$",   # "SOM[MT]" (only works with labeller = label_parsed, which causes letters to be set separately, which doesn't look good in latex)
+                                       "TruffleSOM-graal-experiments"  = "SOMpe"))# "SOM$_{\\textsf{\\scriptsize{PE}}}$"))  # "SOM[PE]"
+levels(norm_interp$VM) <- map_names(levels(norm_interp$VM),
+                                  list("RTruffleSOM-interp-experiments" = "SOMmt", # "SOM$_{\\textsf{\\scriptsize{MT}}}$",  # "SOM[MT]"
+                                       "TruffleSOM-interp-experiments"  = "SOMpe")) # "SOM$_{\\textsf{\\scriptsize{PE}}}$")) # "SOM[PE]"
+
+norm <- rbind(norm_jit, norm_interp)
+
+p <- ggplot(subset(norm, !grepl("Java", VM)), aes(x=Benchmark, y=RunRatio))
+p <- add_hlines(p, seq(1, 18, 2))
+p + geom_boxplot(outlier.size = 0.9) +
+  theme_simple() +
+  facet_grid(. ~ type + VM) +   #, labeller = label_parsed
+  scale_y_continuous(name="Runtime normalized to\nJava (compiled or interpreted)",
+                     breaks=c(1, 4, 8, 12, 16, 20)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5),
+        panel.border = element_rect(colour = "black", fill = NA))
+
+## Prepare Statistics for text
+levels(norm_jit_backup$VM)    <- map_names(
+    levels(norm_jit_backup$VM),
+    list("RTruffleSOM-jit-experiments"   = "SOM[MT]",
+         "TruffleSOM-graal-experiments"  = "SOM[PE]"))
+levels(norm_interp_backup$VM) <- map_names(
+    levels(norm_interp_backup$VM),
+    list("RTruffleSOM-interp-experiments" = "SOM[MT]",
+         "TruffleSOM-interp-experiments"  = "SOM[PE]"))
+norm <- rbind(norm_jit_backup, norm_interp_backup)
+
+bench <- ddply(norm, ~ VM + Benchmark + type,
+             summarise,
+             RunRatio.geomean = geometric.mean(RunRatio),
+             RunRatio.min = min(RunRatio),
+             RunRatio.max = max(RunRatio))
+
+vms <- ddply(bench, ~ VM + type,
+             summarise,
+             BenchRatio.geomean = geometric.mean(RunRatio.geomean),
+             BenchRatio.min     = min(RunRatio.geomean),
+             BenchRatio.max     = max(RunRatio.geomean))
+
+mtc_gm_x  <- fact(vms[vms$type=="Compiled" & vms$VM=="SOM[MT]",]$BenchRatio.geomean)
+mtc_min_x <- fact(vms[vms$type=="Compiled" & vms$VM=="SOM[MT]",]$BenchRatio.min)
+mtc_max_x <- fact(vms[vms$type=="Compiled" & vms$VM=="SOM[MT]",]$BenchRatio.max)
+
+pec_gm_x  <- fact(vms[vms$type=="Compiled" & vms$VM=="SOM[PE]",]$BenchRatio.geomean)
+pec_min_p <-  per(vms[vms$type=="Compiled" & vms$VM=="SOM[PE]",]$BenchRatio.min)
+pec_max_x <- fact(vms[vms$type=="Compiled" & vms$VM=="SOM[PE]",]$BenchRatio.max)
+
+mti_gm_x  <- fact(vms[vms$type=="Interpreted" & vms$VM=="SOM[MT]",]$BenchRatio.geomean)
+mti_min_x <- fact(vms[vms$type=="Interpreted" & vms$VM=="SOM[MT]",]$BenchRatio.min)
+mti_max_x <- fact(vms[vms$type=="Interpreted" & vms$VM=="SOM[MT]",]$BenchRatio.max)
+
+pei_gm_x  <- fact(vms[vms$type=="Interpreted" & vms$VM=="SOM[PE]",]$BenchRatio.geomean)
+pei_min_x <- fact(vms[vms$type=="Interpreted" & vms$VM=="SOM[PE]",]$BenchRatio.min)
+pei_max_x <- fact(vms[vms$type=="Interpreted" & vms$VM=="SOM[PE]",]$BenchRatio.max)
+@
+\caption{SOM performance compared to Java. The \emph{compiled} performance are the SOMs with JIT compiler compared to HotSpot's peak performance. The \emph{interpreted} performance is compared to the HotSpot interpreter (\texttt{-Xint}).}
+\label{fig:perf-comp}
+\end{figure*}
+
+To compare the overall performance of \SOMmt and \SOMpe, we use their
+respective baseline version, \ie, including all optimizations. Furthermore,
+we compare their performance to Java. The compiled performance is compared
+to the results for the HotSpot server compiler and the interpreted performance
+to the Java interpreter (\texttt{-Xint}). Note, the results for the compiled
+and interpreted modes are not comparable. Since the performance difference
+is at least one order of magnitude, the benchmarks were run with different
+parameters. Furthermore, cross-language benchmarking is inherently
+problematic. While the benchmarks are very similar, they are not identical
+and, the VMs executing them are tuned based on how the
+constructs are typically used, which differ between
+languages. Thus, the reported comparison to Java is merely an indication for
+the general order of magnitude one can expect, but no reliable predictor.
+
+\newcommand{\SOMmtPeak}{\(\Sexpr{mtc_gm_x}\)x
+(min. \(\Sexpr{mtc_min_x}\)x, max. \(\Sexpr{mtc_max_x}\)x)\xspace}
+\newcommand{\SOMpePeak}{\(\Sexpr{pec_gm_x}\)x
+(min. \(\Sexpr{pec_min_p}\%\), max. \(\Sexpr{pec_max_x}\)x)\xspace}
+
+\Cref{fig:perf-comp} shows that \SOMmt's peak performance is on this benchmark set on average
+\SOMmtPeak slower than Java 8 on HotSpot.
+\SOMpe is about \SOMpePeak slower. Thus, overall both SOMs reach within \(3\)x 
+of Java performance, even so they are simple interpreters running on top of
+generic JIT compilation frameworks. This means both meta-compilation approaches
+achieve the goal of reaching good performance. However, \SOMmt is
+slower than \SOMpe. At this point, we are not able to attribute this
+performance difference to any conceptual differences between meta-tracing and
+partial evaluation as underlying technique. Instead, when investigating the
+performance differences, we see indications that the performance differences
+are more likely an indication of the amount of engineering that went into the
+RPython and Truffle projects, which results in Truffle and Graal producing more
+efficient machine code, while RPython has remaining optimization opportunities.
+For instance, GraphSearch is much slower on \SOMmt than on \SOMpe. The main
+reason is that RPython currently does not optimize the transition between
+traces. The benchmark has many nested loops and therefore trace transitions.
+But instead of passing only the needed values when transferring to another trace,
+it constructs a frame object with all argument and local variable structures.
+RPython could optimize this by transitioning directly
+to the loop body and passing only the values that are needed.
+
+The performance of \SOMmt being only interpreted is about
+\(\Sexpr{mti_gm_x}\)x (min. \(\Sexpr{mti_min_x}\)x, max. \(\Sexpr{mti_max_x}\)x)
+lower than that of the Java 8 interpreter. Similarly, \SOMpe is about
+\(\Sexpr{pei_gm_x}\)x (min. \(\Sexpr{pei_min_x}\)x, max. \(\Sexpr{pei_max_x}\)x)
+slower than the Java 8 interpreter. Here we see some benchmarks
+being more than an order of magnitude slower. Such high overhead can become
+problematic when applications have short runtimes and very irregular
+behavior, because only parts of the application are executed as compiled
+code with good performance.
+
+<<speedup-over-minimal, cache=TRUE>>=
+base_jit    <- droplevels(subset(stabilized, Var == "baseline" | Var == "minimal"))
+base_interp <- droplevels(subset(data, Iteration >= 25 & (Var == "baseline" | Var == "minimal") & grepl("interp", VM)))
+
+# Exclude microbenchmarks, because neither RPython nor Graal do empty loop detection
+# Exclude List and TreeSort, because we just recently added them, and we don't yet have a full data set for the SOMs
+base_jit_j    <- droplevels(subset(base_jit,    Benchmark != "WhileLoop" & Benchmark != "IntegerLoop" & Benchmark != "FieldLoop" & Benchmark != "List" & Benchmark != "TreeSort"))
+base_interp_j <- droplevels(subset(base_interp, Benchmark != "WhileLoop" & Benchmark != "IntegerLoop" & Benchmark != "FieldLoop" & Benchmark != "List" & Benchmark != "TreeSort"))
+
+norm_jit    <- ddply(base_jit_j, ~ Benchmark + VM, transform,
+              RunRatio = Value / geometric.mean(Value[Var == "minimal"]),
+              Speedup  = geometric.mean(Value[Var == "minimal"]) / Value,
+              type = "Compiled")
+norm_interp <- ddply(base_interp_j, ~ Benchmark + VM, transform,
+              RunRatio = Value / geometric.mean(Value[Var == "minimal"]),
+              Speedup  = geometric.mean(Value[Var == "minimal"]) / Value,
+              type = "Interpreted")
+
+levels(norm_jit$VM)    <- map_names(levels(norm_jit$VM),
+                                  list("RTruffleSOM-jit-experiments"   = "SOM[MT]",
+                                       "TruffleSOM-graal-experiments"  = "SOM[PE]"))
+levels(norm_interp$VM) <- map_names(levels(norm_interp$VM),
+                                  list("RTruffleSOM-interp-experiments"   = "SOM[MT]",
+                                       "TruffleSOM-interp-experiments"  = "SOM[PE]"))
+
+norm <- rbind(norm_jit, norm_interp)
+
+bench <- ddply(norm, ~ VM + Benchmark + type + Var,
+             summarise,
+             RunRatio.geomean = geometric.mean(RunRatio),
+             RunRatio.min = min(RunRatio),
+             RunRatio.max = max(RunRatio),
+             Speedup.geo = geometric.mean(Speedup),
+             Speedup.min = min(Speedup),
+             Speedup.max = max(Speedup))
+
+vms <- ddply(bench, ~ VM + type + Var,
+             summarise,
+             BenchRatio.geomean = geometric.mean(RunRatio.geomean),
+             BenchRatio.min     = min(RunRatio.geomean),
+             BenchRatio.max     = max(RunRatio.geomean),
+             BenchSpeed.geo     = geometric.mean(Speedup.geo),
+             BenchSpeed.min     = min(Speedup.min),
+             BenchSpeed.max     = max(Speedup.max))
+
+bl <- droplevels(subset(vms, Var == "baseline"))
+
+mtc_gm_x  <- fact(bl[bl$type=="Compiled" & bl$VM=="SOM[MT]",]$BenchSpeed.geo)
+mtc_min_p <-  per(bl[bl$type=="Compiled" & bl$VM=="SOM[MT]",]$BenchSpeed.min)
+mtc_max_x <- fact(bl[bl$type=="Compiled" & bl$VM=="SOM[MT]",]$BenchSpeed.max)
+
+pec_gm_x  <- fact(bl[bl$type=="Compiled" & bl$VM=="SOM[PE]",]$BenchSpeed.geo)
+pec_min_x <- fact(bl[bl$type=="Compiled" & bl$VM=="SOM[PE]",]$BenchSpeed.min)
+pec_max_x <- fact(bl[bl$type=="Compiled" & bl$VM=="SOM[PE]",]$BenchSpeed.max)
+
+mti_gm_x  <- fact(bl[bl$type=="Interpreted" & bl$VM=="SOM[MT]",]$BenchSpeed.geo)
+mti_min_p <-  per(bl[bl$type=="Interpreted" & bl$VM=="SOM[MT]",]$BenchSpeed.min)
+mti_max_x <- fact(bl[bl$type=="Interpreted" & bl$VM=="SOM[MT]",]$BenchSpeed.max)
+
+pei_gm_x  <- fact(bl[bl$type=="Interpreted" & bl$VM=="SOM[PE]",]$BenchSpeed.geo)
+pei_min_x <- fact(bl[bl$type=="Interpreted" & bl$VM=="SOM[PE]",]$BenchSpeed.min)
+pei_max_x <- fact(bl[bl$type=="Interpreted" & bl$VM=="SOM[PE]",]$BenchSpeed.max)
+@
+
+\subsection{Whole Program and Warmup Behavior}
+\label{sec:perf-whole-prog}
+
+In addition to interpreter and peak performance, the perceived performance for
+users is also a relevant indicator. Typically, it is influenced by the warmup
+behavior, \ie, the time it takes to reach peak performance and the overall time
+it takes to execute a program. To characterize RPython and Truffle more closely
+in this respect, we measure the time it takes to execute a given benchmark $n$
+times. The measured time is wall-clock time and includes process start and
+shutdown.\footnote{It is measured with the common Unix utility
+\py{/usr/bin/time}.} By varying $n$, we can approximate the warmup behavior. By
+using wall-clock time, we further abstract from the concrete time a single
+iteration takes by accounting for garbage collection, compilation, and other
+miscellaneous runtime overheads. In contrast to the previous measuments,
+we have only a single measurement for each $n$ for each of the benchmarks.
+Because of the long runtimes, it was impractical to collect
+more. However, the graphs indicate that the measurement errors are acceptable since
+the lines are relatively smooth and the results correspond to the other measurements.
+
+\begin{figure*}
+\centering
+<<perf-whole-program, fig.width=7, fig.height=2.3, fig.show='asis', strip.white=TRUE, cache=TRUE>>=
+startup <- subset(do_load("../evaluation/data/whole-program.data.bz2"), Unit == "ms", select = c(Value, Benchmark, VM, Cores, Iteration, Extra)) #
+norm_start <- ddply(startup, ~ Benchmark +  Extra + Iteration, transform, # Cores
+              Ratio = Value / (max(Value[VM == "Java-no-expgc-nominheap"]) / max(Cores) * Cores))
+
+norm_start_java <- ddply(startup, ~ Benchmark + Cores + Extra + Iteration, transform,
+              Ratio = Value / Value[VM == "Java-no-expgc-nominheap"])
+
+stats_start <- ddply(norm_start_java, ~ VM + Cores + Iteration,
+               summarise,
+               Value.geomean = geometric.mean(Value),
+               Value.mean    = mean(Value),
+               Value.median  = median(Value),
+               Ratio.geomean = geometric.mean(Ratio))
+
+levels(norm_start$VM) <- map_names(levels(norm_start$VM),
+                             list("Java-no-expgc-nominheap" = "Java",
+                                  "RTruffleSOM-jit-no-expgc"   = "SOMmt",  # "SOM$_{\\textsf{\\scriptsize{MT}}}$",   # "SOM[MT]" (only works with labeller = label_parsed, which causes letters to be set separately, which doesn't look good in latex)
+                                  "TruffleSOM-graal-no-expgc-nominheap"  = "SOMpe")) # "SOM$_{\\textsf{\\scriptsize{PE}}}$"))  # "SOM[PE]"
+
+plot <- ggplot(subset(norm_start, Cores <= 1000), aes(x=Cores, y=Ratio))
+  plot <- plot + geom_line(aes(colour = VM))
+  plot <- plot + theme_simple() + theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+                                        legend.key = element_blank(),
+                                        legend.margin = unit(0, "cm"),
+                                        legend.title=element_blank(),
+                                        axis.title.x = element_text(size = 8),
+                                        legend.position=c(1.05, .45), # legend.position=c(1.178, .45), # optimized for print
+                                        legend.background = element_rect(fill="transparent"),
+                                        plot.margin = unit(c(0, 1.6, 0, 0), "cm"))
+  plot <- plot + facet_wrap(~ Benchmark, nrow = 2)
+  plot <- plot + scale_x_continuous(breaks = c(0, 500, 1000)) +
+    scale_y_continuous(breaks = c(0, 5, 10)) +
+    scale_color_manual(values=c("#600000", "#3465a4", "#e9b96e"))
+  plot <- plot + coord_cartesian(ylim = c(0, 10))
+plot + ylab("Wall-clock time for n iterations\nnormalized to Java") +
+    xlab("Run length in n iterations of benchmarks")
+
+pe_1_x    <- fact(stats_start[stats_start$VM=="TruffleSOM-graal-no-expgc-nominheap" & stats_start$Cores==1,]$Ratio.geomean)
+pe_200_x  <- fact(stats_start[stats_start$VM=="TruffleSOM-graal-no-expgc-nominheap" & stats_start$Cores==200,]$Ratio.geomean)
+pe_1000_x <- fact(stats_start[stats_start$VM=="TruffleSOM-graal-no-expgc-nominheap" & stats_start$Cores==1000,]$Ratio.geomean)
+
+mt_1_x    <- fact(stats_start[stats_start$VM=="RTruffleSOM-jit-no-expgc" & stats_start$Cores==1,]$Ratio.geomean)
+mt_1000_x <- fact(stats_start[stats_start$VM=="RTruffleSOM-jit-no-expgc" & stats_start$Cores==1000,]$Ratio.geomean)
+@
+\caption{Whole program behavior of SOM compared to Java. 
+Each benchmark is execute $n$ times within the same VM processes and we measure
+the overall wall-clock time for the execution. For each benchmark, the result
+for $n$ iterations is normalized to the $n$-th
+fraction of Java with 1000 iterations.}
+\label{fig:perf-whole-program}
+\end{figure*}
+
+\Cref{fig:perf-whole-program} depicts the results for our benchmark set. To
+emphasize the warmup behavior, the results are normalized with
+$f(n) = time_{\mathrm{VM}}(n) / (time_{\mathrm{Java}}(1000) / 1000 * n)$
+that represents an idealized behavior based on Java's peak performance.
+This means, each result is normalized by the the $n$-th
+fraction of the result for Java with 1000 iterations.
+This approach results in a plot that shows the warmup behavior for all three
+systems and allows us to compare them visually. At each point, the plot shows
+the factor by which \SOMmt, \SOMpe, and Java are slower than a hypothetical VM
+with Java peak performance.
+
+For the first benchmark, Bounce, we see that \SOMmt starts out to be minimally faster
+than Java, but then Java warms up faster and \SOMmt eventually cannot keep up with it.
+\SOMpe however starts out being significantly slower and then warms up slowly.
+On this particular benchmark, \SOMmt remains faster so that the high warmup
+cost of \SOMpe is not compensated by higher peak performance. For benchmarks
+such as Fannkuch or GraphSearch on the other hand, \SOMpe warms up faster and
+compensates for its warmup cost early on. Averaging these results over all
+benchmarks, we find that \SOMpe starts out to be about \(\Sexpr{pe_1_x}\)x
+slower than Java and after 1000 benchmark iterations reaches \(\Sexpr{pe_1000_x}\)x.
+\SOMmt starts out with about \(\Sexpr{mt_1_x}\)x slower and is after
+1000 iterations \(\Sexpr{mt_1000_x}\)x slower than Java. Compared to \SOMmt, it takes
+\SOMpe about 200 iterations to break even and reach a performance of
+\(\Sexpr{pe_200_x}\)x slower than Java.
+
+In its current state, Truffle does not optimize startup performance. On the
+one hand, it builds on the standard HotSpot JVM and all interpreter code
+as well as the code of the Graal JIT compiler are first compiled by HotSpot,
+which increases the warmup time. On the other hand, the Graal JIT compiler
+itself is designed to be a top-tier compiler optimizing for peak performance,
+which makes it comparably slow. RPython on the other hand does create a
+static binary of the interpreter, which does not need to warmup and therefore is
+initially faster. From the conceptual perspective, this difference is not
+related to the meta-compilation approaches, but merely an artifact of the
+concrete systems.
+
+
+\begin{figure*}
+\centering
+<<perf-mem, fig.width=7, fig.height=2.3, fig.show='asis', strip.white=TRUE, cache=TRUE>>=
+mem <- droplevels(subset(do_load("../evaluation/data/whole-program.data.bz2"), Unit == "kb", select = c(Value, Unit, Benchmark, VM, Cores, Iteration, Extra))) #
+
+norm_mem <- ddply(mem, ~ Benchmark + Cores + Extra + Iteration, transform,
+              Value.MB = round(Value / 1024),
+              Value.GB = round(Value / 1024 / 1024),
+              Ratio = Value / Value[VM == "RTruffleSOM-jit-no-expgc"])
+
+stats_mem <- ddply(norm_mem, ~ VM + Cores + Iteration,
+               summarise,
+               Ratio.geomean = geometric.mean(Ratio))
+
+
+levels(norm_mem$VM) <- map_names(levels(norm_mem$VM),
+                             list("Java-no-expgc-nominheap" = "Java",
+                                  "RTruffleSOM-jit-no-expgc"   = "SOMmt",  # "SOM$_{\\textsf{\\scriptsize{MT}}}$",   # "SOM[MT]" (only works with labeller = label_parsed, which causes letters to be set separately, which doesn't look good in latex)
+                                  "TruffleSOM-graal-no-expgc-nominheap"  = "SOMpe")) #"SOM$_{\\textsf{\\scriptsize{PE}}}$"))  # "SOM[PE]"
+
+plot <- ggplot(subset(norm_mem, Cores <= 2000), aes(x=Cores, y=Ratio))
+  plot <- plot + geom_line(aes(colour = VM))
+  plot <- plot + theme_simple() + theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+                                        legend.key = element_blank(),
+                                        legend.margin = unit(0, "cm"),
+                                        legend.title=element_blank(),
+                                        axis.title.x = element_text(size = 8),
+                                        legend.position=c(1.05, .45), #legend.position=c(1.178, .45), # optimized for print
+                                        legend.background = element_rect(fill="transparent"),
+                                        plot.margin = unit(c(0, 1.6, 0, 0), "cm"))
+  plot <- plot + facet_wrap(~ Benchmark, nrow = 2)
+  plot <- plot + scale_x_continuous(breaks = c(0, 750, 1500))
+  #plot <- #scale_y_continuous(breaks = c(0, 5, 10)) +
+  plot <- plot + scale_color_manual(values=c("#600000", "#3465a4", "#e9b96e"))
+  plot <- plot + coord_cartesian(ylim = c(0, 40))
+plot + ylab("Max RSS for n iterations\nnormalized to SOMmt") +  #ylab("Max RSS for n iterations\nnormalized to SOM$_{\\textsf{\\scriptsize{MT}}}$")
+    xlab("Run length in n iterations of benchmarks")
+
+norm_mem_j <- ddply(mem, ~ Benchmark + Cores + Extra + Iteration, transform,
+              Value.MB = round(Value / 1024),
+              Value.GB = round(Value / 1024 / 1024),
+              Ratio = Value / Value[VM == "Java-no-expgc-nominheap"])
+
+stats_mem_j <- ddply(norm_mem_j, ~ VM + Cores + Iteration,
+               summarise,
+               Ratio.geomean = geometric.mean(Ratio))
+
+
+t_1_x    <- fact(stats_mem_j[stats_mem_j$VM=="TruffleSOM-graal-no-expgc-nominheap" & stats_mem_j$Cores==1,]$Ratio.geomean)
+t_1500_x <- fact(stats_mem_j[stats_mem_j$VM=="TruffleSOM-graal-no-expgc-nominheap" & stats_mem_j$Cores==1500,]$Ratio.geomean)
+@
+\caption{Maximum resident set size, \ie, maximum memory usage of SOM and Java
+normalized to \SOMmt. 
+Each benchmark is execute $n$ times within the same VM processes and we measure
+the max. RSS for the execution. For each benchmark, the result
+for $n$ iterations is normalized to \SOMmt.}
+\label{fig:perf-mem}
+\end{figure*}
+
+\subsection{Memory Usage}
+\label{sec:perf-mem-usage}
+
+With the differences in how objects are represented between Java and our SOM
+implementations, as well as the question of how effective optimizations such as
+escape analyses are, it is interesting to investigate the memory usage of
+programs executing on RPython and Truffle. Especially for programs with large
+data sets, memory usage can have a major performance impact. For this
+comparison we can unfortunately not rely on precise information since RPython
+does not provide access to the current heap usage or statistics from the
+garbage collector. Thus, we measure the maximum resident set size (RSS) as
+reported by the Unix \py{time} utility. This number only gives a rough
+indication of the maximal memory pressure during program execution. Thus, we
+measure it for different number of iterations of the benchmarks. However, this
+numbers is also interesting, because it includes all memory used by the
+systems. It includes the garbage collected heap memory as well as memory that
+is used by the VM for instance for the generated machine code.
+
+The results are depicted in \cref{fig:perf-mem}. The measurements are
+normalized based on \SOMmt, because it has the smallest overall resident set
+size, and the resulting graph shows more details than if it would be normalized
+to Java. Note that the direct comparison between \SOMmt and Java or \SOMpe is
+not allowing any conclusion with respect to the meta-compilation approaches,
+because the systems are too different. However, a comparison of \SOMpe with
+Java is possible.
+
+Averaged over all benchmarks, \SOMpe has at the first iteration an
+\(\Sexpr{t_1_x}\)x higher max. RSS than Java. After 1500 iterations, the
+difference is down to \(\Sexpr{t_1500_x}\)x. This means, that \SOMpe has a
+higher initial footprint than Java. The dynamic overhead seems to be still
+higher than Java's but significantly less then the initial factor of
+\(\Sexpr{t_1_x}\)x.
+
+Currently, neither \SOMpe nor \SOMmt use precise allocation, \ie, minimize
+the allocated memory for objects based on the knowledge of their layout.
+Instead, they use an object representation with 5 fields for primitive values
+(longs or doubles), 5 fields for object values, and optional extension arrays
+for primitive and object values. In praxis, this means that small objects
+use more space then needed. Arrays on the other hand use storage strategies
+and thus, do not use more memory than necessary.
+
+Since the garbage collectors of RPython and HotSpot are so different, we
+cannot draw conclusions from this data with respect to the meta-compilation
+approaches.
+
+\subsection{Implementation Sizes}
+
+In addition to the achievable performance, engineering aspects can be of
+importance for language implementations as well. To gain some insight of
+how partial evaluation and meta-tracing compare in that regard, we determine
+the implementation sizes of the experiments. However, in addition to the weak
+insights measurement of implementation size provides, it needs to be noted 
+that the obtained numbers are only directly comparable for experiments with
+the same SOM implementation. Since Java and RPython have significant
+syntactical and semantic differences, a direct comparison is not possible.
+Instead, we compare the relative numbers with respect to the corresponding
+baseline implementation. The reported percentages are based on the implementation
+without an optimization as denominator so that the percentage indicates the
+change needed to add the optimization.
+
+\begin{table*}
+\centering
+<<impl-stats, results='asis'>>=
+cloc <- read.table("../evaluation/data/cloc.csv", sep=",", header=TRUE, fill=TRUE)
+churn <- read.table("../evaluation/data/patch-stats.csv", sep=",", header=TRUE, fill=TRUE)
+loc <- merge(cloc, churn)
+
+loc <- rename(loc, c("experiment" = "Var"))
+loc <- prepare_exp_names(loc)
+
+levels(loc$VM) <- map_names(levels(loc$VM),
+                            list("RTruffleSOM" = "KKSOMmtKK",   ## we use a hook later to turn this into the correct macro, because otherwise the backslash is turned into \textbackslash{}
+                                 "TruffleSOM"  = "KKSOMpeKK"))
+
+loc_rel <- ddply(loc, ~ VM, transform, 
+                 total = comment + code + blank) ## to calculate the relative values for ins. and del., we need first the total, because git reports physical file lines
+loc_rel <- ddply(loc_rel, ~ VM, transform, 
+                 delIp = ((insertions / total) * 100), ## Note: I swap the column labels here since we use the total as denominator and 'baseline' as comparison.
+                 insIp = ((deletions / total) * 100),
+              # codeP = code / code[Var == "baseline"],
+              codeI = (code[Var == "baseline"] / code) - 1.0,  ## procentual increase in LOC for experiment, with itself as baseline
+              codeIp = ((code[Var == "baseline"] / code) - 1.0) * 100)
+
+loc_tab <- droplevels(subset(loc_rel, !grepl("minimal", Var), 
+                             select = c(VM, Var, codeIp, insIp, delIp, code, insertions, deletions)))
+
+## Try to order result, doesn't seem to work
+loc_tab <- loc_tab[with(loc_tab, order(as.character(Var), code)), ]
+
+avoid_nan <- function (x) {
+  #is.integer(x) && 
+  ifelse(length(x) == 0L, '', x)}
+
+## Sort Table by Levels, and sort the baseline to the top
+l <- sort(levels(loc_tab$Var))
+arr_st <- l[[1]]
+base   <- l[[2]]
+l[[1]] <- base
+l[[2]] <- arr_st
+loc_tab$Var <- factor(loc_tab$Var, levels = l)
+
+t <- tabular(Justify("r ")*Heading()*Var ~ 
+            Heading()*VM*(Heading('LOC \\%') *(Format(digits=1)*codeIp))*Heading()*(avoid_nan) +
+            Format(digits=0)*Heading()*VM*(Heading('LOC') * code + Heading('ins.') * insertions + Heading('del.') * deletions)*Heading()*(avoid_nan), data=loc_tab)
+table_options(justification="c ")
+latex(t)
+
+SOMmt_min_LOC  <- loc_rel[loc_rel$Var == "minimal" & loc_rel$VM == "KKSOMmtKK",]$code
+SOMmt_min_LOCp <- round(loc_rel[loc_rel$Var == "minimal" & loc_rel$VM == "KKSOMmtKK",]$codeIp)
+SOMmt_bas_LOC  <- loc_rel[loc_rel$Var == "baseline" & loc_rel$VM == "KKSOMmtKK",]$code
+
+SOMpe_min_LOC  <- loc_rel[loc_rel$Var == "minimal" & loc_rel$VM == "KKSOMpeKK",]$code
+SOMpe_min_LOCp <- round(loc_rel[loc_rel$Var == "minimal" & loc_rel$VM == "KKSOMpeKK",]$codeIp)
+SOMpe_bas_LOC  <- loc_rel[loc_rel$Var == "baseline" & loc_rel$VM == "KKSOMpeKK",]$code
+@
+\caption{Implementation sizes of the implementations without the optimization.
+LOC: Lines of code excluding comments and empty lines,
+LOC \%: increase of LOC to add optimization,
+ins./del.: inserted and deleted lines as reported by \texttt{git}}
+\label{tab:impl-sizes}
+\end{table*}
+
+\newcommand{\SOMmtLOCp}{\(\Sexpr{SOMmt_min_LOCp}\%\)\xspace}
+\newcommand{\SOMpeLOCp}{\(\Sexpr{SOMpe_min_LOCp}\%\)\xspace}
+
+\newcommand{\SOMmtBaseLOC}{\(\Sexpr{SOMmt_bas_LOC}\)\xspace}
+\newcommand{\SOMpeBaseLOC}{\(\Sexpr{SOMpe_bas_LOC}\)\xspace}
+
+As first indication, we compare the minimal versions of the SOM interpreters
+without optimizations with the baseline versions. \SOMmt has
+\(\Sexpr{SOMmt_min_LOC}\) lines of code (LOC, excluding blank lines and comments)
+with all optimizations added it grows to \(\Sexpr{SOMmt_bas_LOC}\)\,LOC which
+is a \SOMmtLOCp increase. The minimal version of \SOMpe has 
+\(\Sexpr{SOMpe_min_LOC}\)\,LOC and grows to \(\Sexpr{SOMpe_bas_LOC}\)\,LOC
+with all optimizations, which is an increase of \SOMpeLOCp.
+Thus, \SOMpe is overall larger, which is expected since we apply more
+optimizations.
+
+\Cref{tab:impl-sizes} lists the data for all experiments incl.
+absolute numbers. Comparing the relative increases of implementation sizes
+for \SOMmt and \SOMpe indicates that the optimizations are roughly of the
+same size in both cases. The only outlier is the implementation of inline
+caching which is larger for \SOMpe. Here the language differences between
+RPython and Java are becoming apparent and causes the \SOMpe implementation to
+be much more concise. 
+
+\paragraphDot{Conclusion}
+Considering performance and implementation sizes combined,
+we see for \SOMmt an overall peak performance
+increase of \(\Sexpr{mtc_gm_x}\)x (min. \(\Sexpr{mtc_min_p}\%\), max.
+\(\Sexpr{mtc_max_x}\)x) for going from the minimal to the baseline version.
+The
+interpreter performance improves by \(\Sexpr{mti_gm_x}\)x (min.
+\(\Sexpr{mti_min_p}\%\), max. \(\Sexpr{mti_max_x}\)x). Note, the minimal
+version includes one trace merge point in the \st{while} loop to enable trace
+compilation (cf. \cref{sec:rpython}). For \SOMpe, the peak performance
+improves by \(\Sexpr{pec_gm_x}\)x (min. \(\Sexpr{pec_min_x}\)x, max.
+\(\Sexpr{pec_max_x}\)x) from the minimal to the baseline version. \SOMpe's
+interpreter speed improves by \(\Sexpr{pei_gm_x}\)x (min.
+\(\Sexpr{pei_min_x}\)x, max. \(\Sexpr{pei_max_x}\)x). \SOMpe also implements 
+\st{while} in the interpreter, but it does not provide the same benefits
+for the partial evaluator as it does for the meta-tracer.
+
+We conclude that for partial evaluation the optimizations are essential to
+gain performance. For meta-tracing however, they are much less essential and
+can be used more gradually to improve the performance for specific use cases.
