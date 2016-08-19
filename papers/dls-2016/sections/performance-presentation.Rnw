@@ -1,0 +1,265 @@
+%!TEX root = ../fast.tex
+
+<<knitr-settings, echo=FALSE, include=FALSE, cache=FALSE>>=
+if (Sys.getenv("RSTUDIO") == "1") { setwd("/Users/smarr/Projects/PostDoc/FASTXX/paper/sections/") } else { source("../scripts/knitr-settings.R", chdir=TRUE) }
+source("../scripts/libraries.R", chdir=TRUE)
+
+opts_chunk$set(
+    fig.path="figures/",
+    dev=c('pdf'),
+    dev.args=list(pointsize=10),
+    echo=FALSE,
+    external=FALSE,
+    tidy=FALSE)
+
+
+vm_names <- c("Java8U66"              = "Java",
+              "SOMns-Enterprise"      = "SOMns",
+              "TruffleSOM-TOM-Enterprise" = "TruffleSOM",
+              "GraalJS"               = "Graal.js",
+              "Node"                  = "Node.js",
+              "Crystal"               = "Crystal",
+              "JRubyJ8"               = "JRuby",
+              "JRubyTruffleEnterprise" = "JRuby+Truffle",
+              "MRI23"                 = "MRI",
+              "RBX314"                = "Rubinius")
+
+vms_all  <- names(vm_names)
+vms_slow <- c("RBX314", "MRI23", "JRubyJ8")
+vms_fast <- c("Crystal", "GraalJS", "JRubyTruffleEnterprise",
+              "Java8U66", "Node", "SOMns-Enterprise",
+              "TruffleSOM-TOM-Enterprise")
+vms_truffle <- c("GraalJS", "JRubyTruffleEnterprise",
+                 "SOMns-Enterprise", "TruffleSOM-TOM-Enterprise")
+
+assert_that(all(sort(c(vms_slow, vms_fast)) == sort(vms_all))) ## sanity check
+
+vm_colors <- brewer.pal(10, "Paired")  # to replace scale_fill_brewer(type = "qual", palette = "Paired")
+names(vm_colors) <- vm_names
+
+data <- load_rebench_file("../data/benchmark.data.bz2")
+data <- droplevels(subset(
+  data,
+  VM %in% vms_all & Benchmark != "DeltaBlueV8",
+  select = c(Value, Unit, Benchmark, VM, Iteration)))
+
+data_fast_vms      <- droplevels(subset(data, Iteration >= 1500))
+data_very_slow_vms <- droplevels(subset(data, VM == "RBX314" | VM == "MRI23"))
+data_slow_vms      <- droplevels(subset(data, Iteration >= 100 & VM == "JRubyJ8"))
+
+
+### Rule: normalize only after aggregate measure has been calculated
+###   I am very confused about what to do here
+
+peak <- rbind(data_fast_vms, data_slow_vms, data_very_slow_vms)
+norm <- ddply(peak, ~ Benchmark, transform,
+              ## scaling by a constant per benchmark (this is normalizing raw data)
+              RuntimeRatio = Value / mean(Value[VM == "Java8U66"]))
+stats <- ddply(norm, ~ VM + Benchmark, summarise,
+               RR.sd = sd(RuntimeRatio),
+               RuntimeFactor = mean(RuntimeRatio))  ## central estimator, is this correct?
+stats_rf <- stats
+
+## add additional VM stats to `stats` to use it for sorting
+stats <- ddply(stats, ~ VM, transform,
+    VMMean = geometric.mean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+stats_vm <- ddply(stats, ~ VM, summarise,
+    VMMean = geometric.mean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+norm_all <- ddply(data, ~ Benchmark, transform,
+              ## scaling by a constant per benchmark (this is normalizing raw data)
+              RuntimeRatio = Value / mean(Value[VM == "Java8U66"]))
+stats_all <- ddply(norm_all, ~ VM + Benchmark, summarise,
+               RR.sd = sd(RuntimeRatio),
+               RuntimeFactor = mean(RuntimeRatio))  ## central estimator, is this 
+stats_all_vm <- ddply(stats_all, ~ VM, summarise,
+    VMMean = geometric.mean(RuntimeFactor),
+    median = median(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+norm_ns_all <- ddply(data, ~ Benchmark, transform,
+              ## scaling by a constant per benchmark (this is normalizing raw data)
+              RuntimeRatio = Value / mean(Value[VM == "SOMns-Enterprise"]))
+stats_ns_all <- ddply(norm_ns_all, ~ VM + Benchmark, summarise,
+               RR.sd = sd(RuntimeRatio),
+               RuntimeFactor = mean(RuntimeRatio))  ## central estimator, is this 
+stats_ns_all <- ddply(stats_ns_all, ~ VM, transform,
+    VMMean = geometric.mean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+
+stats_ns_all_vm <- ddply(stats_ns_all, ~ VM, summarise,
+    VMMean = geometric.mean(RuntimeFactor),
+    median = median(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+stats_ns_all_b <- ddply(subset(stats_ns_all, VM %in% vms_truffle), ~ Benchmark, summarise,
+    mean = geometric.mean(RuntimeFactor),
+    median = median(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+#subset(stats_ns_all_vm, VM %in% c("GraalJS", "SOMns-Enterprise", "TruffleSOM-TOM-Enterprise", "JRubyTruffleEnterprise"))
+
+
+stats_lb <- droplevels(subset(stats_rf, Benchmark %in% c("CD", "DeltaBlue", "Havlak", "Json", "Richards")))
+stats_sb <- droplevels(subset(stats_rf, Benchmark %in% c("Bounce", "List", "Mandelbrot",
+  "NBody", "Permute", "Queens",  "Sieve", "Storage", "Towers")))
+
+stats_lb <- ddply(stats_lb, ~ VM, transform,
+    VMMean = geometric.mean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+  
+stats_sb <- ddply(stats_sb, ~ VM, transform,
+    VMMean = geometric.mean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+# ddply(stats_lb, ~ VM, summarise,
+#     VMMean = geometric.mean(RuntimeFactor),
+#     min = min(RuntimeFactor),
+#     max = max(RuntimeFactor))
+# 
+# ddply(stats_sb, ~ VM, summarise,
+#     VMMean = geometric.mean(RuntimeFactor),
+#     min = min(RuntimeFactor),
+#     max = max(RuntimeFactor))
+# stats<-stats_ns_all
+# vms <- vms_truffle
+overview_box_plot <- function(stats, vms, prepare_data = NULL, pre_plot = NULL) {
+  vm_stats <- subset(stats, VM %in% vms)
+  vm_stats$VM <- revalue(vm_stats$VM, vm_names)
+  vm_stats$VM <- reorder(vm_stats$VM, X=-vm_stats$VMMean)
+  #if (!is.null(prepare_data)) {
+  #  vm_stats <- prepare_data(vm_stats)
+  #}
+  # cat(levels(vm_stats$VM))
+  breaks <- levels(droplevels(vm_stats)$VM)
+  col_values <- sapply(breaks, function(x) vm_colors[[x]])
+
+  plot <- ggplot(vm_stats, aes(x=VM, y=RuntimeFactor, fill = VM))
+  if (!is.null(pre_plot)) {
+    plot <- pre_plot(plot)
+  }
+  plot <- plot +
+    geom_boxplot(outlier.size = 0.5) + #fill=get_color(5, 7)
+    stat_summary(fun.y=geometric.mean, colour="#000000", geom="point",
+                 shape=4, size=1, show.legend = FALSE) + 
+    theme_bw() + theme_simple(font_size = 8) +
+    theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+          legend.position="none",
+          axis.title.y = element_blank()) +
+    #scale_y_log10(breaks=c(1,2,3,10,20,30,50,100,200,300,500,1000)) + #limit=c(0,30), breaks=seq(0,100,5), expand = c(0,0)
+    ggtitle("Runtime Factor, normalized to Java\n(lower is better)") + coord_flip() + xlab("") +
+    scale_fill_manual(values = col_values)
+  plot
+}
+
+# stats <- subset(stats, Benchmark %in% c("Bounce", "DeltaBlue", "Permute", "Richards", "Storage", "Towers"))
+# vms <- vms_slow
+
+plot_benchmarks_speedup_for_vms_faceted <- function(
+  stats, vms, ylab = "Runtime Factor, normalized to Java\n(lower is better)") {
+  vm_stats <- subset(stats, VM %in% vms)
+  vm_stats$VM <- revalue(vm_stats$VM, vm_names)
+  breaks <- levels(droplevels(vm_stats)$VM)
+  col_values <- sapply(breaks, function(x) vm_colors[[x]])
+
+  p <- ggplot(vm_stats, aes(x = VM, y = RuntimeFactor, fill = VM)) +
+      geom_bar(stat = "identity") +
+      geom_errorbar(aes(ymax = RuntimeFactor + RR.sd, ymin = RuntimeFactor - RR.sd), width=0.25) +
+      facet_wrap(~ Benchmark, ncol = 1, scales="free_y") +
+       theme_bw() + theme_simple(font_size = 8) + # scale_fill_manual(values=col) + coord_flip() +
+      theme(legend.position="none", axis.text.x=element_text(angle=90, hjust = 1, vjust = 0.5)) +
+    scale_fill_manual(values = col_values) +
+    ylab(ylab)
+  print(p)
+}
+
+sld_s <- function(vm) {
+  m <- subset(stats_ns_all_vm, VM == vm)$VMMean
+  round((m - 1) * 100)
+}
+
+sld_j <- function(vm) {
+  m <- subset(stats_all_vm, VM == vm)$VMMean
+  round(m)
+}
+
+sld_b_j <- function(vm, b) {
+  m <- subset(stats_all, VM == vm & Benchmark == b)$RuntimeFactor
+  round(m, 1)
+}
+@
+
+\newcommand{\GraalJSOverSOMPer}{\(\Sexpr{sld_s("GraalJS")}\%\)\xspace}
+\newcommand{\JRubyTOverSOMPer}{\(\Sexpr{sld_s("JRubyTruffleEnterprise")}\%\)\xspace}
+\newcommand{\TSOMOverSOMPer}{\(\Sexpr{sld_s("TruffleSOM-TOM-Enterprise")}\%\)\xspace}
+\newcommand{\NodeJSOverSOMPer}{\(\Sexpr{sld_s("Node")}\%\)\xspace}
+
+\newcommand{\JRubyOverJavaX}{\(\Sexpr{sld_j("JRubyJ8")}\)x\xspace}
+\newcommand{\RBXOverJavaX}{\(\Sexpr{sld_j("RBX314")}\)x\xspace}
+\newcommand{\MRIOverJavaX}{\(\Sexpr{sld_j("MRI23")}\)x\xspace}
+
+\newcommand{\CrystalStorageOverJavaX}{\(\Sexpr{sld_b_j("Crystal", "Storage")}\)x\xspace}
+
+<<perf-overview-truffle, fig.width=5, fig.height=2, cache=TRUE>>=
+p <- overview_box_plot(stats_ns_all, vms_truffle, pre_plot = function (p) { 
+  p + geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed") +
+      geom_hline(aes(yintercept=1.1), colour="#cccccc", linetype="dashed") +  
+      geom_hline(aes(yintercept=2), colour="#cccccc", linetype="dashed") +
+      geom_hline(aes(yintercept=3), colour="#cccccc", linetype="dashed") +
+      geom_hline(aes(yintercept=4), colour="#cccccc", linetype="dashed") +
+      geom_hline(aes(yintercept=5), colour="#cccccc", linetype="dashed")})
+p + scale_y_continuous(limit=c(0.6,5), breaks = c(1, 1.1, 2, 3, 4, 5)) +
+  theme(plot.margin = unit(c(0.05,0.05,0.05,0.05), "cm"))
+@
+
+
+<<perf-overview-fast-vms, fig.width=5, fig.height=3, cache=TRUE>>=
+p <- overview_box_plot(stats, vms_fast, pre_plot = function (p) { 
+  p + geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed") +
+      geom_hline(aes(yintercept=2), colour="#cccccc", linetype="dashed") +
+      geom_hline(aes(yintercept=3), colour="#cccccc", linetype="dashed") })
+p + scale_y_continuous(limit=c(0.9,12.5), breaks = c(1, 2, 3, 4, 6, 8, 10, 12))
+@
+
+
+\def\BenchmarkDetailsFastVMs{%
+<<benchmark-details-fast-6-fast-vms, fig.width=1.5, fig.height=6.4, cache=TRUE>>=
+stats$VM <- reorder(stats$VM, X=stats$VMMean)
+plot_benchmarks_speedup_for_vms_faceted(
+  subset(stats, Benchmark %in% c("CD", "DeltaBlue", "Havlak", "Json", "Richards", "Bounce", "List")),
+  vms_fast)
+plot_benchmarks_speedup_for_vms_faceted(
+  subset(stats, Benchmark %in% c("Mandelbrot", "NBody", "Permute", "Queens",  "Sieve", "Storage", "Towers")),
+  vms_fast, "")
+@
+}%
+
+\def\PerfOverviewAllVMs{%
+<<performance-overview, fig.width=5, fig.height=4, cache=TRUE>>=
+p <- overview_box_plot(stats, vms_all, prepare_vm_names)
+p + scale_y_continuous(breaks = c(1, 5, seq(from=10, by=10, to=100)))
+@
+}%
+
+\def\BenchmarkDetailsSlowVMs{%
+<<benchmark-details-fast-6-slow-vms, fig.width=0.9, fig.height=5.2, cache=TRUE>>=
+plot_benchmarks_speedup_for_vms_faceted(
+  subset(stats, Benchmark %in% c("CD", "DeltaBlue", "Havlak", "Json", "Richards", "Bounce", "List")),
+  vms_slow)
+plot_benchmarks_speedup_for_vms_faceted(
+  subset(stats, Benchmark %in% c("Mandelbrot", "NBody", "Permute", "Queens",  "Sieve", "Storage", "Towers")),
+  vms_slow, "")
+@
+}%

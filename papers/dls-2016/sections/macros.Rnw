@@ -1,0 +1,142 @@
+%!TEX root = ../fast.tex
+
+<<knitr-settings, echo=FALSE, include=FALSE, cache=FALSE>>=
+if (Sys.getenv("RSTUDIO") == "1") { setwd("/Users/smarr/Projects/PostDoc/FASTXX/paper/sections/") } else { source("../scripts/knitr-settings.R", chdir=TRUE) }
+
+source("../scripts/libraries.R", chdir=TRUE)
+source("../scripts/metrics.R", chdir=TRUE)
+source("../scripts/data.R", chdir=TRUE)
+@
+
+<<code-size-stats, echo=FALSE, include=FALSE, cache=FALSE>>=
+# executed LOC, num used classes, num exec methods, num per iter. methods
+gen_stats <- ldply(benchmark_names, get_general_stats)
+struct_data <- get_structural_execution_stats()
+
+empty_gen_stats    <- get_general_stats("Empty")
+empty_meth         <- get_method_data("Empty")
+empty_used_classes <- get_class_stats("Empty")
+
+eloc <- function (bname) {
+  gen_stats[gen_stats$Benchmark==bname,]$LinesExecuted - empty_gen_stats$LinesExecuted
+}
+uc   <- function (bname) {
+  struct_data[struct_data$Benchmark==bname,]$NumClassesWithExecutedMethods - empty_used_classes$NumClassesWithExecutedMethods
+}
+em   <- function (bname) {
+  ## this is a hack, because we do not do this precisely, the two sets (benchmark and empty benchmark are not exactly the same)
+  max(im(bname), 
+         struct_data[struct_data$Benchmark==bname,]$NumMethodsExecutedAtLeastOnce - empty_meth$NumMethodsExecutedAtLeastOnce)
+}
+im   <- function (bname) {
+  struct_data[struct_data$Benchmark==bname,]$NumMethodsExecutedEachIteration - empty_meth$NumMethodsExecutedEachIteration
+}
+@
+
+%% Executed Lines of Code
+\newcommand{\ElocCD}{\(\Sexpr{eloc("CD")}\)}
+\newcommand{\ElocDB}{\(\Sexpr{eloc("DeltaBlue")}\)}
+\newcommand{\ElocHL}{\(\Sexpr{eloc("Havlak")}\)}
+\newcommand{\ElocJS}{\(\Sexpr{eloc("Json")}\)}
+\newcommand{\ElocRI}{\(\Sexpr{eloc("Richards")}\)}
+
+\newcommand{\ElocBO}{\(\Sexpr{eloc("Bounce")}\)}
+\newcommand{\ElocBS}{\(\Sexpr{eloc("Sort.BubbleSort-SOM")}\)}
+\newcommand{\ElocLI}{\(\Sexpr{eloc("List")}\)}
+\newcommand{\ElocMA}{\(\Sexpr{eloc("Mandelbrot")}\)}
+\newcommand{\ElocNB}{\(\Sexpr{eloc("NBody")}\)}
+\newcommand{\ElocPE}{\(\Sexpr{eloc("Permute")}\)}
+\newcommand{\ElocQU}{\(\Sexpr{eloc("Queens")}\)}
+\newcommand{\ElocQS}{\(\Sexpr{eloc("Sort.QuickSort-SOM")}\)}
+\newcommand{\ElocSI}{\(\Sexpr{eloc("Sieve")}\)}
+\newcommand{\ElocST}{\(\Sexpr{eloc("Storage")}\)}
+\newcommand{\ElocTO}{\(\Sexpr{eloc("Towers")}\)}
+\newcommand{\ElocTS}{\(\Sexpr{eloc("Sort.TreeSort-SOM")}\)}
+
+\newcommand{\ElocDI}{\(\Sexpr{eloc("LanguageFeatures.Dispatch-SOM")}\)}
+\newcommand{\ElocFI}{\(\Sexpr{eloc("LanguageFeatures.Fibonacci-SOM")}\)}
+\newcommand{\ElocFL}{\(\Sexpr{eloc("LanguageFeatures.FieldLoop-SOM")}\)}
+\newcommand{\ElocIL}{\(\Sexpr{eloc("LanguageFeatures.IntegerLoop-SOM")}\)}
+\newcommand{\ElocLO}{\(\Sexpr{eloc("LanguageFeatures.Loop-SOM")}\)}
+\newcommand{\ElocRE}{\(\Sexpr{eloc("LanguageFeatures.Recurse-SOM")}\)}
+
+%% Used Classes
+\newcommand{\UcCD}{\(\Sexpr{uc("CD")}\)}
+\newcommand{\UcDB}{\(\Sexpr{uc("DeltaBlue")}\)}
+\newcommand{\UcHL}{\(\Sexpr{uc("Havlak")}\)}
+\newcommand{\UcJS}{\(\Sexpr{uc("Json")}\)}
+\newcommand{\UcRI}{\(\Sexpr{uc("Richards")}\)}
+
+\newcommand{\UcBO}{\(\Sexpr{uc("Bounce")}\)}
+\newcommand{\UcBS}{\(\Sexpr{uc("Sort.BubbleSort-SOM")}\)}
+\newcommand{\UcLI}{\(\Sexpr{uc("List")}\)}
+\newcommand{\UcMA}{\(\Sexpr{uc("Mandelbrot")}\)}
+\newcommand{\UcNB}{\(\Sexpr{uc("NBody")}\)}
+\newcommand{\UcPE}{\(\Sexpr{uc("Permute")}\)}
+\newcommand{\UcQU}{\(\Sexpr{uc("Queens")}\)}
+\newcommand{\UcQS}{\(\Sexpr{uc("Sort.QuickSort-SOM")}\)}
+\newcommand{\UcSI}{\(\Sexpr{uc("Sieve")}\)}
+\newcommand{\UcST}{\(\Sexpr{uc("Storage")}\)}
+\newcommand{\UcTO}{\(\Sexpr{uc("Towers")}\)}
+\newcommand{\UcTS}{\(\Sexpr{uc("Sort.TreeSort-SOM")}\)}
+
+\newcommand{\UcDI}{\(\Sexpr{uc("LanguageFeatures.Dispatch-SOM")}\)}
+\newcommand{\UcFI}{\(\Sexpr{uc("LanguageFeatures.Fibonacci-SOM")}\)}
+\newcommand{\UcFL}{\(\Sexpr{uc("LanguageFeatures.FieldLoop-SOM")}\)}
+\newcommand{\UcIL}{\(\Sexpr{uc("LanguageFeatures.IntegerLoop-SOM")}\)}
+\newcommand{\UcLO}{\(\Sexpr{uc("LanguageFeatures.Loop-SOM")}\)}
+\newcommand{\UcRE}{\(\Sexpr{uc("LanguageFeatures.Recurse-SOM")}\)}
+
+%% Executed Methods (at least once)
+\newcommand{\EmCD}{\(\Sexpr{em("CD")}\)}
+\newcommand{\EmDB}{\(\Sexpr{em("DeltaBlue")}\)}
+\newcommand{\EmHL}{\(\Sexpr{em("Havlak")}\)}
+\newcommand{\EmJS}{\(\Sexpr{em("Json")}\)}
+\newcommand{\EmRI}{\(\Sexpr{em("Richards")}\)}
+
+\newcommand{\EmBO}{\(\Sexpr{em("Bounce")}\)}
+% \newcommand{\EmBS}{\(\Sexpr{em("Sort.BubbleSort-SOM")}\)}
+\newcommand{\EmLI}{\(\Sexpr{em("List")}\)}
+\newcommand{\EmMA}{\(\Sexpr{em("Mandelbrot")}\)}
+\newcommand{\EmNB}{\(\Sexpr{em("NBody")}\)}
+\newcommand{\EmPE}{\(\Sexpr{em("Permute")}\)}
+\newcommand{\EmQU}{\(\Sexpr{em("Queens")}\)}
+% \newcommand{\EmQS}{\(\Sexpr{em("Sort.QuickSort-SOM")}\)}
+\newcommand{\EmSI}{\(\Sexpr{em("Sieve")}\)}
+\newcommand{\EmST}{\(\Sexpr{em("Storage")}\)}
+\newcommand{\EmTO}{\(\Sexpr{em("Towers")}\)}
+% \newcommand{\EmTS}{\(\Sexpr{em("Sort.TreeSort-SOM")}\)}
+
+% \newcommand{\EmDI}{\(\Sexpr{em("LanguageFeatures.Dispatch-SOM")}\)}
+% \newcommand{\EmFI}{\(\Sexpr{em("LanguageFeatures.Fibonacci-SOM")}\)}
+% \newcommand{\EmFL}{\(\Sexpr{em("LanguageFeatures.FieldLoop-SOM")}\)}
+% \newcommand{\EmIL}{\(\Sexpr{em("LanguageFeatures.IntegerLoop-SOM")}\)}
+% \newcommand{\EmLO}{\(\Sexpr{em("LanguageFeatures.Loop-SOM")}\)}
+% \newcommand{\EmRE}{\(\Sexpr{em("LanguageFeatures.Recurse-SOM")}\)}
+
+%% Executed Methods (per iteration)
+\newcommand{\ImCD}{\(\Sexpr{im("CD")}\)}
+\newcommand{\ImDB}{\(\Sexpr{im("DeltaBlue")}\)}
+\newcommand{\ImHL}{\(\Sexpr{im("Havlak")}\)}
+\newcommand{\ImJS}{\(\Sexpr{im("Json")}\)}
+\newcommand{\ImRI}{\(\Sexpr{im("Richards")}\)}
+
+\newcommand{\ImBO}{\(\Sexpr{im("Bounce")}\)}
+% \newcommand{\ImBS}{\(\Sexpr{im("Sort.BubbleSort-SOM")}\)}
+\newcommand{\ImLI}{\(\Sexpr{im("List")}\)}
+\newcommand{\ImMA}{\(\Sexpr{im("Mandelbrot")}\)}
+\newcommand{\ImNB}{\(\Sexpr{im("NBody")}\)}
+\newcommand{\ImPE}{\(\Sexpr{im("Permute")}\)}
+\newcommand{\ImQU}{\(\Sexpr{im("Queens")}\)}
+% \newcommand{\ImQS}{\(\Sexpr{im("Sort.QuickSort-SOM")}\)}
+\newcommand{\ImSI}{\(\Sexpr{im("Sieve")}\)}
+\newcommand{\ImST}{\(\Sexpr{im("Storage")}\)}
+\newcommand{\ImTO}{\(\Sexpr{im("Towers")}\)}
+% \newcommand{\ImTS}{\(\Sexpr{im("Sort.TreeSort-SOM")}\)}
+
+% \newcommand{\ImDI}{\(\Sexpr{im("LanguageFeatures.Dispatch-SOM")}\)}
+% \newcommand{\ImFI}{\(\Sexpr{im("LanguageFeatures.Fibonacci-SOM")}\)}
+% \newcommand{\ImFL}{\(\Sexpr{im("LanguageFeatures.FieldLoop-SOM")}\)}
+% \newcommand{\ImIL}{\(\Sexpr{im("LanguageFeatures.IntegerLoop-SOM")}\)}
+% \newcommand{\ImLO}{\(\Sexpr{im("LanguageFeatures.Loop-SOM")}\)}
+% \newcommand{\ImRE}{\(\Sexpr{im("LanguageFeatures.Recurse-SOM")}\)}

@@ -1,0 +1,285 @@
+%!TEX root = ../fast.tex
+
+<<knitr-settings, echo=FALSE, include=FALSE, cache=FALSE>>=
+if (Sys.getenv("RSTUDIO") == "1") { setwd("/Users/smarr/Projects/PostDoc/FASTXX/paper/sections/") } else { source("../scripts/knitr-settings.R", chdir=TRUE) }
+
+source("../scripts/libraries.R", chdir=TRUE)
+source("../scripts/metrics.R", chdir=TRUE)
+source("../scripts/data.R", chdir=TRUE)
+
+opts_chunk$set(
+    fig.path="figures/",
+    dev=c('pdf'),
+    dev.args=list(pointsize=10),
+    echo=FALSE,
+    external=FALSE,
+    tidy=FALSE)
+
+@
+
+
+\def\PolymorphismAndCallStats{%
+<<polymorphism-and-call-stats, cache=TRUE, results='asis', strip.white=TRUE>>=
+call_stats   <- ldply(benchmark_names, get_rcvr_callsite_stats)
+cl_stats     <- ldply(benchmark_names, get_closure_stats)
+stack_height <- ldply(benchmark_names, get_general_stats)
+
+
+call_table <- ddply(call_stats, ~ Benchmark, summarise,
+      MonoCalls     = NumCalls[Num.Rcvrs==1],
+      MonoCallSites = NumCallSites[Num.Rcvrs==1],
+      PolyCalls     = sum(NumCalls[Num.Rcvrs>1]),
+      PolyCallSites = sum(NumCallSites[Num.Rcvrs>1]))
+
+
+cl_table <- ddply(cl_stats, ~ Benchmark, summarise,
+      MonoApplies      = ifelse(length(NumApplications[Num.Targets==1]) == 0, 0, NumApplications[Num.Targets==1]),
+      MonoClosureSites = ifelse(length(NumSites[Num.Targets==1]) == 0, 0, NumSites[Num.Targets==1]),
+      PolyApplies      = sum(NumApplications[Num.Targets>1]),
+      PolyClosureSites = sum(NumSites[Num.Targets>1]))
+
+table <- merge(merge(call_table, cl_table), stack_height)
+table <- prepare_benchmark_names(table)
+
+t <- tabular(Benchmark ~ ((Heading("Method Calls") *
+                       (Heading("Monomorphic") * 
+                          (Heading("sites")*MonoCallSites + Heading("calls")*MonoCalls * Format(big.mark=",")) +
+                        Heading("Polymorphic") *
+                          (Heading("sites")*PolyCallSites + Heading("calls")*PolyCalls * Format(big.mark=","))) +
+                     Heading("Closure Application") *
+                       (Heading("Monomorphic") *
+                         (Heading("sites")*MonoClosureSites + Heading("applies")*MonoApplies * Format(big.mark=",")) +
+                        Heading("Polymorphic") *
+                         (Heading("sites")*PolyClosureSites + Heading("applies")*PolyApplies * Format(big.mark=",")))) +
+                    Heading("max. stack")*MaxStackHeight * Format(big.mark=",")) * Heading() * identity, table)
+latex(t, options = list(toprule="", bottomrule=""))
+@
+}%
+
+\def\ControlFlowStats{%
+<<control-flow-stats, cache=TRUE, fig.width=5, fig.height=2.6, fig.show='asis', strip.white=TRUE>>=
+data <- ldply(benchmark_names, get_operation_stats)
+data[is.na(data)] <- 0
+
+ctf <- subset(data, select = c(Benchmark, MonoRcvrCalls, PolyRcvrCalls, MonoApplies, PolyApplies, BranchesPerIter, LoopIterations))
+ctf <- prepare_benchmark_names(ctf)
+
+ctf <- ddply(ctf, ~ Benchmark, transform,
+             total = MonoRcvrCalls + PolyRcvrCalls + MonoApplies + PolyApplies + BranchesPerIter + LoopIterations)
+
+ctf <- ddply(ctf, ~ Benchmark, transform,
+             MonoRcvrCalls = MonoRcvrCalls / total,
+             PolyRcvrCalls = PolyRcvrCalls / total,
+             MonoApplies   = MonoApplies   / total,
+             PolyApplies   = PolyApplies   / total,
+             BranchesPerIter = BranchesPerIter / total,
+             LoopIterations = LoopIterations / total)
+ctf <- subset(ctf, select = -c(total))
+
+ctf <- rename(ctf, c("MonoRcvrCalls" = "mono. calls (1)",
+                     "PolyRcvrCalls" = "poly. calls (2) ",
+                     "MonoApplies"   = "mono. closures (3)",
+                     "PolyApplies"   = "poly. closures (4)",
+                     "BranchesPerIter" = "branches (5)",
+                     "LoopIterations"  = "loop iterations (6)"))
+
+pd <- melt(ctf, id.vars = c('Benchmark'))
+
+df <- ddply(pd, ~ Benchmark, transform,
+            mid_y=cumsum(value) - (0.5 * value),
+            part_label = ifelse(value > 0.03, as.numeric(variable), ""))
+
+df <- subset(df, Benchmark %in% c("CD", "DeltaBlue", "Havlak", "Json", "Richards"))
+ggplot(df, aes(x = Benchmark, y = value, fill = variable)) + 
+  geom_bar(position = "fill", stat = "identity", colour="#ffffff") + 
+  geom_text(aes(y = mid_y, label=part_label), size = 2) +
+  scale_y_continuous(name = NULL) +
+  scale_fill_brewer(palette = "Paired", guide = guide_legend(title = NULL, reverse = TRUE)) +
+    coord_flip() +
+  theme_bw() + theme_simple(font_size = 8) + theme(
+    legend.title = element_blank(),
+    legend.text = element_text(size = 7),
+    legend.key = element_blank(),
+    legend.key.size = unit(0.3, "cm"),
+    legend.position = "bottom",
+    axis.text.x = element90())
+@
+}%
+
+\def\AllocAndAccessStats{%
+<<alloc-and-access-stats, cache=TRUE, fig.width=5, fig.height=2.6, fig.show='asis', strip.white=TRUE>>=
+aaa <- subset(data, select = c(Benchmark, NumArrays, NumObjects, NumFieldReads, NumFieldWrites, NumArrReads, NumArrWrites))
+
+aaa <- ddply(aaa, ~ Benchmark, transform,
+             total = NumArrays + NumObjects + NumFieldReads + NumFieldWrites + NumArrReads + NumArrWrites)
+
+aaa <- ddply(aaa, ~ Benchmark, transform,
+             NumArrays      = NumArrays      / total,
+             NumObjects     = NumObjects     / total,
+             NumFieldReads  = NumFieldReads  / total,
+             NumFieldWrites = NumFieldWrites / total,
+             NumArrReads    = NumArrReads    / total,
+             NumArrWrites   = NumArrWrites   / total)
+aaa <- subset(aaa, select = -c(total))
+
+aaa <- prepare_benchmark_names(aaa)
+aaa <- rename(aaa, c("NumArrays" = "new arrays (1)",
+                     "NumObjects" = "new objects (2)",
+                     "NumFieldReads"   = "field reads (3)",
+                     "NumFieldWrites"   = "field writes (4)",
+                     "NumArrReads" = "array reads (5)",
+                     "NumArrWrites"  = "array writes (6)"))
+
+pd <- melt(aaa, id.vars = c('Benchmark'))
+df <- ddply(pd, ~ Benchmark, transform,
+            mid_y=cumsum(value) - (0.5 * value),
+            part_label = ifelse(value > 0.03, as.numeric(variable), ""))
+
+df <- subset(df, Benchmark %in% c("CD", "DeltaBlue", "Havlak", "Json", "Richards"))
+ggplot(df, aes(x = Benchmark, y = value, fill = variable)) + 
+  geom_bar(position = "fill", stat = "identity", colour="#ffffff") + 
+  geom_text(aes(y = mid_y, label=part_label), size = 2) +
+  scale_y_continuous(name = NULL) +
+  scale_fill_brewer(palette = "Paired", guide = guide_legend(title = NULL, reverse = TRUE)) +
+  coord_flip() +
+  theme_bw() + theme_simple(font_size = 8) + theme(
+    legend.title = element_blank(),
+    legend.text = element_text(size = 7),
+    legend.key = element_blank(),
+    legend.key.size = unit(0.3, "cm"),
+    legend.position = "bottom",
+    axis.text.x = element90())
+@
+}%
+
+\def\BasicOperations{%
+<<basic-operations, cache=TRUE, fig.width=5, fig.height=2.8, fig.show='asis', strip.white=TRUE>>=
+d <- ldply(benchmark_names, get_op_group_stats)
+d <- ddply(d, ~ Benchmark, transform,
+           PerIterPart = PerIteration / sum(PerIteration))
+
+bo <- prepare_benchmark_names(d)
+
+# name_map <- list(
+#   "IntCmp" = "bool, int: $<$, $>$, $=$, $\\le$, $\\neq$, $\\ge$ (1)",
+#   "PtrCmp" = "ptr: $=$, $\\neq$ (2)",
+#   "IntArith" = "bool, int: $+$, $-$, $\\&$, $\\hat{}$, $!$, $<<$, $>>>$ (3)~~",
+#   "FltCmp" = "float: $<$, $>$, $=$, $\\le$, $\\neq$, $\\ge$ (4)",
+#   "FltArith" = "float: $+$, $-$, $\\times$, $/$, \\texttt{round} (5)",
+#   "FltCplx"  = "float: \\texttt{sin}, \\texttt{cos}, \\texttt{sqrt} (6)",
+#   "Length" = "str, arr: \\texttt{length} (7)",
+#   "IntCplx"  = "int: $\\times$, $/$, $\\%$, \\texttt{rem} (8)",
+#   "StrCmp" = "str: $+$, $=$, $\\neq$ (9)",
+#   "SubStr" = "str: \\texttt{substring} (10)")
+
+name_map <- list(
+  "IntCmp" = "bool, int: <, >, =, <=, !=, >= (1)",
+  "PtrCmp" = "ptr: =, != (2)",
+  "IntArith" = "bool, int: +, -, &, ^, !, <<, >>> (3)~~",
+  "FltCmp" = "float: <, >, =, <=, !=, >= (4)",
+  "FltArith" = "float: +, -, *, /, round (5)",
+  "FltCplx"  = "float: sin, cos, sqrt (6)",
+  "Length" = "str, arr: length (7)",
+  "IntCplx"  = "int: *, /, %, rem (8)",
+  "StrCmp" = "str: +, =, != (9)",
+  "SubStr" = "str: substring (10)")
+
+levels(bo$GroupSimple) <- map_names(levels(bo$GroupSimple), name_map)
+bo <- arrange(bo, Benchmark, GroupSimple)
+bo <- ddply(bo, ~ Benchmark, transform,
+            mid_y=cumsum(PerIterPart) - (0.5 * PerIterPart),
+            part_label = ifelse(PerIterPart > 0.03, as.numeric(GroupSimple), ""))
+
+bo <- subset(bo, Benchmark %in% c("CD", "DeltaBlue", "Havlak", "Json", "Richards"))
+ggplot(bo, aes(x = Benchmark, y = PerIterPart, fill = GroupSimple)) + 
+  geom_bar(position = "fill", stat = "identity", colour = "#ffffff") + 
+  geom_text(aes(y = mid_y, label=part_label), size = 2) +
+  scale_y_continuous(name = NULL) + 
+  guides(fill = guide_legend(nrow = 5, reverse = TRUE, title = NULL)) +
+  scale_fill_brewer(palette = "Paired") +
+  coord_flip() +
+  theme_bw() + theme_simple(font_size = 8) + theme(
+    legend.title = element_blank(),
+    legend.key = element_blank(),
+    legend.key.size = unit(0.3, "cm"),
+    legend.position = "bottom",
+    axis.text.x = element90())
+@
+}%
+
+\def\PCAOneTwo{%
+<<pca-pc1-2, cache=TRUE, fig.width=3, fig.height=1.9, fig.show='asis', strip.white=TRUE>>=
+d <- ldply(benchmark_names, get_operation_stats)
+d[is.na(d)] <- 0
+d_pca <- prcomp(d[-1], scale = TRUE)
+
+# determine cummulative variance
+p_pca <- cbind(d[1], predict(d_pca))
+vars <- apply(d_pca$x, 2, var)  
+props <- vars / sum(vars)
+c <- cumsum(props)
+cum_var_4 <- round(c[[4]] * 100)
+
+num_metrics <- ncol(d) - 1  # -1 to account for name-of-the-benchmark column
+
+#s <- summary(d_pca)
+#s$importance
+ 
+# ## from: http://www.r-bloggers.com/pca-and-k-means-clustering-of-delta-aircraft/
+# ## visualizing components
+# #comp <- data.frame(d_pca$x[,1:4])
+# #plot(comp, pch=16, col=rgb(0,0,0,0.5))
+# 
+# Clustering using the PCA:
+# #comp <- data.frame(d_pca$x)  #[,1:4]
+# #row.names(comp) <- d[[1]]
+# #k <- kmeans(comp, 10, nstart=25, iter.max=1000)
+# #View(k$clust)
+# 
+
+# Clustering using the raw data (not normalized/scaled)
+# d1 <- subset(d, select = -c(Benchmark))
+# row.names(d1) <- d[[1]]
+# 
+# k <- kmeans(d1, 11, nstart=25, iter.max=1000)
+# 
+# #sort(table(k$clust))
+# #clust <- names(sort(table(k$clust)))
+# #row.names(d[k$clust==clust[1],])
+# #View(k$clust)
+
+ggplot(p_pca, aes(y = PC1, x = PC2)) +  #, label = Benchmark
+  geom_text_repel(aes(label = Benchmark), size = 2, 
+    segment.color = "#aaaaaa",
+    box.padding = unit(0.45, "lines")) +
+  geom_point(size = 0.5) +
+  # geom_text(vjust = -0.6, angle = -45, size = 1.8) +
+  #coord_cartesian(xlim = c(-4.6, 5.5), ylim = c(-5, 8.8)) +
+  theme_bw() + theme_simple(font_size = 8) +
+  theme(axis.title.x = element_text(size = 7), axis.title.y = element_text(size = 7)) +
+  coord_cartesian(ylim = c(-11, 6))
+@
+}%
+
+\def\PCAThreeFour{%
+<<pca-pc3-4, cache=TRUE, fig.width=3, fig.height=1.9, fig.show='asis', strip.white=TRUE>>=
+ggplot(p_pca, aes(y = PC3, x = PC4)) +  ## , label = Benchmark
+  geom_text_repel(aes(label = Benchmark), size = 2, 
+    segment.color = "#aaaaaa",
+    box.padding = unit(0.45, "lines")) +
+  geom_point(size = 0.5) +
+  #geom_text(vjust = -0.6, angle = -45, size = 2) +
+  #coord_cartesian(xlim = c(-3.2, 4.5), ylim = c(-7, 5)) +
+  theme_bw() + theme_simple(font_size = 8) +
+  theme(axis.title.x = element_text(size = 7), axis.title.y = element_text(size = 7))
+
+#s <- summary(d_pca)
+#sort(abs(d_pca$rotation[,1]))
+#sort(abs(d_pca$rotation[,2]))
+#sort(abs(d_pca$rotation[,3]))
+#sort(abs(d_pca$rotation[,4]))
+@
+}%
+
+\newcommand{\CumVarianceFour}{\(\Sexpr{cum_var_4}\%\)\xspace}
+\newcommand{\NumMetrics}{\(\Sexpr{num_metrics}\)\xspace}
