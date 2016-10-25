@@ -1,0 +1,52 @@
+%!TEX root = ../threadsafeobjects.tex
+
+<<knitr-settings, echo=FALSE, include=FALSE, cache=FALSE>>=
+source("../scripts/data.R", chdir=TRUE)
+
+full = actors_data()
+
+peak <- actors_peak(full)
+
+# Make results relative to baseline
+norm <- ddply(peak, ~ Benchmark,
+              transform,
+              Value = Value / median(Value[VM == "Unsafe"]))
+
+# Stats time!
+mean <- ddply(peak, ~ VM + Benchmark, summarise,
+              MeanTime = mean(Value),
+              MedianTime = median(Value))
+scaled <- ddply(mean, ~ Benchmark, transform,
+              RuntimeFactor = MeanTime / MeanTime[VM=="Unsafe"],
+              MedianFactor= MedianTime / MedianTime[VM=="Unsafe"])
+my_stats <- ddply(scaled, ~ VM, summarise,
+                  median = median(RuntimeFactor),
+                  mean = mean(RuntimeFactor),
+                  geomean = geometric.mean(RuntimeFactor),
+                  min = min(RuntimeFactor),
+                  max = max(RuntimeFactor))
+
+radix_overhead = subset(scaled, VM=="Safe" & Benchmark=="RadixSort")$RuntimeFactor - 1
+max_overhead = max(subset(scaled, VM=="Safe")$RuntimeFactor) - 1
+geomean_overhead = subset(my_stats, VM=="Safe")$geomean - 1
+
+radix_time_per_iteration = subset(scaled, VM=="Safe" & Benchmark=="RadixSort")$MeanTime / 1000.0
+radix_messages = 500010
+radix_time_per_messages = radix_time_per_iteration / radix_messages * 1000000.0
+radix_messages_per_sec = radix_messages / radix_time_per_iteration
+
+
+scala_benchmarks <- subset(scaled, VM == "Scala Akka")
+scala_apsp_rf  <- subset(scala_benchmarks, Benchmark == "APSP")$RuntimeFactor
+scala_radix_rf <- subset(scala_benchmarks, Benchmark == "RadixSort")$RuntimeFactor
+scala_trap_rf  <- subset(scala_benchmarks, Benchmark == "Trapezoidal")$RuntimeFactor
+@
+
+\newcommand\overheadRadixSort{\(\Sexpr{round(radix_overhead * 100)}\)\%}
+\newcommand\maxParallelOverhead{\(\Sexpr{round(max_overhead * 100)}\)\%}
+\newcommand\geomeanParallelOverhead{\(\Sexpr{round(geomean_overhead * 100)}\)\%}
+
+\newcommand\APSPAkkaSpeedup{\(\Sexpr{round((1.0 - scala_apsp_rf) * 100)}\)\%\xspace}
+\newcommand\RadixSortAkkaSlowdown{\(\Sexpr{round((scala_radix_rf - 1.0) * 100)}\)\%\xspace}
+\newcommand\TrapAkkaSlowdown{\(\Sexpr{round((scala_trap_rf - 1.0) * 100)}\)\%\xspace}
+

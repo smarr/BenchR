@@ -1,0 +1,71 @@
+%!TEX root = ../threadsafeobjects.tex
+
+<<knitr-settings, echo=FALSE, include=FALSE, cache=FALSE>>=
+if (Sys.getenv("RSTUDIO") == "1") { setwd("/Users/smarr/Projects/PostDoc/Benoit-Daloze/papers/2016-ThreadSafeDynamicObject/sections") }
+
+source("../scripts/data.R", chdir=TRUE)
+
+opts_chunk$set(
+    fig.path="figures/",
+    # dev=c('tikz'),
+    dev.args=list(pointsize=10),
+    dev='pdf',#c('tikz', 'corollarysvg'),
+    echo=FALSE,
+    external=FALSE,
+    tidy=FALSE)
+
+full = sequential_data()
+peak = sequential_peak(full)
+
+# Make results relative to baseline
+norm <- ddply(peak, ~ Benchmark,
+              transform,
+              Value = Value / median(Value[VM == "Unsafe"]))
+
+# Stats time!
+mean <- ddply(peak, ~ VM + Benchmark, summarise,
+              MeanTime = mean(Value),
+              MedianTime = median(Value))
+scaled <- ddply(mean, ~ Benchmark, transform,
+              RuntimeFactor = MeanTime / MeanTime[VM=="Unsafe"],
+              MedianFactor= MedianTime / MedianTime[VM=="Unsafe"])
+my_stats <- ddply(scaled, ~ VM, summarise,
+                  median = median(RuntimeFactor),
+                  mean = mean(RuntimeFactor),
+                  geomean = geometric.mean(RuntimeFactor),
+                  min = min(RuntimeFactor),
+                  max = max(RuntimeFactor))
+
+deltablue_speedup = 1 - subset(scaled, VM=="Safe" & Benchmark=="DeltaBlue")$RuntimeFactor
+
+max_median_delta = max(abs(1 - subset(scaled, VM == "Safe" & Benchmark != "DeltaBlue")$MedianFactor))
+
+allSharedGeomean = subset(my_stats, VM == "All Shared")$geomean - 1
+allSharedMax = subset(my_stats, VM == "All Shared")$max
+
+@
+
+\newcommand\speedupDeltaBlue{\(\Sexpr{round(deltablue_speedup * 100)}\)\%}
+\newcommand\maxDiffSequential{\(\Sexpr{round(max_median_delta * 100, 1)}\)\%}
+\newcommand\allSharedSequentialGeomean{\(\Sexpr{round(allSharedGeomean * 100)}\)\%}
+\newcommand\maxOverheadAllSharedSequential{\(\Sexpr{round(allSharedMax, 1)}\)}
+
+\begin{figure*}[!ht]
+<<sequential-perf, out.width=NULL, fig.width=7, fig.height=2.5, fig.show='asis', strip.white=TRUE>>=
+col_map    <- get_color_map(exp_names)
+breaks     <- levels(droplevels(norm)$VM)
+col_values <- get_colors(breaks, col_map)
+
+plot <- ggplot(aes(y = Value, x = Benchmark, vm = VM, color = VM), data = norm) +
+  geom_boxplot(outlier.size=0.1,lwd=0.4) +
+  coord_cartesian(ylim = c(0.6,2.6)) +
+  my_theme(legend.pos=c(0,1)) +
+  theme(axis.title.y = element_text(size = 7, angle = 90, vjust=0.5, margin=margin(0,3,0,0))) +
+  scale_colour_manual(values = col_values) +
+  ylab("Runtime normalized to Unsafe\n(lower is better)")
+plot
+
+@
+\caption{Impact on sequential performance, comparing the \emph{unsafe} and \emph{safe} object model. \emph{All Shared} does not distinguish local and shared objects, and approximates state-of-the-art object models synchronizing on all object writes. Lower is better.}
+\label{fig:sequential-perf}
+\end{figure*}

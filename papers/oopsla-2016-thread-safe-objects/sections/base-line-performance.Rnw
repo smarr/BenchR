@@ -1,0 +1,58 @@
+%!TEX root = ../threadsafeobjects.tex
+<<knitr-settings, echo=FALSE, include=FALSE, cache=FALSE>>=
+if (Sys.getenv("RSTUDIO") == "1") { setwd("/Users/smarr/Projects/PostDoc/Benoit-Daloze/papers/2016-ThreadSafeDynamicObject/sections") }
+
+source("../scripts/libraries.R", chdir=TRUE)
+
+opts_chunk$set(
+    fig.path="figures/",
+    # dev=c('tikz'),
+    dev.args=list(pointsize=10),
+    dev='pdf',#c('tikz', 'corollarysvg'),
+    echo=FALSE,
+    external=FALSE,
+    tidy=FALSE)
+
+data <- rbind(load_data_file("../data/benchmark.data.bz2"),
+              load_data_file("../data/bdata-MRI23.bz2"))
+
+## We are only interested in standard Java, V8, and JRubyTruffleEnterprise, and the V8 version of deltablue is also not intersting (it is still in the data set)
+data <- droplevels(subset(data, Benchmark != "DeltaBlueV8",
+                          select = c(Value, Unit, Benchmark, VM, Iteration)))
+
+## take warmed up sample
+peak <- rbind(subset(data, Iteration >= 700 & Iteration <= 999),
+              subset(data, VM == "MRI22" | VM == "MRI23"),
+              subset(data, Iteration >= 90 & Iteration <= 170 & VM %in% c("JRubyC2", "JRubyGraal", "JRubyJ8", "RBX314")))
+
+norm <- ddply(peak, ~ Benchmark, transform,
+              RuntimeRatio = Value / mean(Value[VM == "Java8U66"]))
+stats <- ddply(norm, ~ VM + Benchmark, summarise,
+               Time.ms = mean(Value),
+               sd      = sd(Value),
+               RuntimeFactor = mean(RuntimeRatio),
+               RR.sd         = sd(RuntimeRatio))
+vm_stats <- ddply(stats, ~ VM, summarise,
+                  median = median(RuntimeFactor),
+                  geommean = geometric.mean(RuntimeFactor),
+                  min = min(RuntimeFactor),
+                  max = max(RuntimeFactor))
+
+filtered_data = prepare_vm_names(subset(stats, (VM == "Java8U66" | VM == "JRubyTruffleEnterprise" | VM == "Node")))
+
+@
+<<base-perf, out.width=NULL, fig.width=3.25, fig.height=1.6, fig.show='asis', strip.white=TRUE, fig.cap="Comparing the performance of Java 1.8.0\\_66, JRuby+Truffle, and Node.js 5.4 based on twelve benchmarks that use a set of common language features between all three languages. Lower is better.">>=
+plot <- ggplot(filtered_data, aes(x=VM, y=RuntimeFactor)) +
+    geom_boxplot(lwd=0.3, color = "darkgray") + # ,fill=c("blue", brewer.pal(9, "YlOrRd")[7], brewer.pal(9, "YlOrRd")[4])
+    geom_jitter(size=0.7, position = position_jitter(width = .2, height = 0)) +
+    theme_simple() + theme(
+      legend.position="none",
+      axis.title.y = element_blank()) +
+    ggtitle("Runtime Factor, normalized to Java") +
+    coord_flip(ylim = c(0.89, 4.5)) + xlab("")
+plot
+@
+\newcommand\medianJT{\(\Sexpr{round(subset(vm_stats, VM=="JRubyTruffleEnterprise")$median, 1)}\)}
+\newcommand\medianNode{\(\Sexpr{round(subset(vm_stats, VM=="Node")$median, 1)}\)}
+\newcommand\medianJRubyIndy{\(\Sexpr{round(subset(vm_stats, VM=="JRubyJ8")$median, 1)}\)}
+\newcommand\medianMRI{\(\Sexpr{round(subset(vm_stats, VM=="MRI23")$median, 1)}\)}

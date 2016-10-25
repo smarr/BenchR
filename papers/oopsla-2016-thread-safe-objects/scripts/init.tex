@@ -1,0 +1,51 @@
+%!TEX root = ../threadsafeobjects.tex
+
+%% paper independent setup
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{microtype}
+
+\usepackage{fixltx2e} % for \textsubscript
+% \usepackage[authoryear,comma,square,sort&compress]{natbib}
+\usepackage{ifpdf}
+\usepackage{graphicx}
+
+\usepackage{ifplatform}
+
+\newif\ifhtml
+\ifpdf
+\htmlfalse
+\else
+\htmltrue
+\fi
+
+\input{scripts/hyperref-init.tex}
+
+\usepackage{scripts/collab}
+%\usepackage[hidecomments]{scripts/collab}
+
+% \input{scripts/listings-init.tex}
+\input{scripts/misc-macros.tex}
+\input{scripts/knitr-init.tex}
+
+\usepackage[nameinlink,capitalise]{cleveref}
+\Crefformat{lstlisting}{#2Lst.\,#1#3}
+\crefformat{lstlisting}{#2lst.\,#1#3}
+
+\ifmacosx
+\usepackage[cache=false]{minted}
+\else
+\usepackage{minted}
+\fi
+
+%\usemintedstyle{friendly}
+\usemintedstyle{colorful} % but no italics comments
+%\AtBeginEnvironment{minted}{%
+%    \fontsize{9}{9}\selectfont}
+
+% balance columns on the last page
+\usepackage{flushend}
+
+% Macros for this paper
+\newcommand{\Self}{\textsc{Self}\xspace}
