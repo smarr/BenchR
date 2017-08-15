@@ -1,0 +1,272 @@
+%!TEX root = ../truffle-java.tex
+
+<<knitr-settings, echo=FALSE, include=FALSE, cache=FALSE>>=
+if (Sys.getenv("RSTUDIO") == "1") { setwd("/Users/smarr/Projects/PostDoc/Matthias-Grimmer/SSW_Grimmer/2017-ManLang-TruffleJava/sections/") } else { source("../scripts/knitr-settings.R", chdir=TRUE) }
+source("../scripts/libraries.R", chdir=TRUE)
+
+vm_names <- c(
+  "Server"                  = "Hotspot C2",
+  "TruffleJava_core"        = "TruffleBC",  # just for demo...
+  "TruffleJava_specialized" = "TruffleBC opt")
+
+vm_colors <- brewer.pal(3, "Paired")  # to replace scale_fill_brewer(type = "qual", palette = "Paired")
+tmp <- vm_colors[3]
+vm_colors[3] <- vm_colors[1]
+vm_colors[1] <- tmp
+
+names(vm_colors) <- vm_names
+
+full_data <- load_rebench_file("../data/test2000.data.bz2")
+data <- droplevels(subset(
+  full_data, Iteration > 1000, select = c(Value, Unit, Benchmark, VM, Suite, Iteration)))
+
+## TODO: remove first itertions to avoid including warmup
+
+### Rule: normalize only after aggregate measure has been calculated
+###   I am very confused about what to do here
+
+calc_stats <- function(baseline) {
+  norm <- ddply(data, ~ Benchmark + Suite, here(transform),
+              ## scaling by a constant per benchmark (this is normalizing raw data)
+              RuntimeRatio = Value / mean(Value[VM == baseline]),
+              Speedup      = mean(Value[VM == baseline]) / Value)
+  stats <- ddply(norm, ~ VM + Benchmark + Suite, summarise,
+               RR.sd = sd(RuntimeRatio),
+               RuntimeFactor = mean(RuntimeRatio),
+               SpeedupFactor = mean(Speedup))  ## central estimator, is this correct?
+
+  ## add additional VM stats to `stats` to use it for sorting
+  stats <- ddply(stats, ~ VM + Suite, transform,
+    VMMean = geometric.mean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+  stats_vm <- ddply(stats, ~ VM + Suite, summarise,
+    VMMean = geometric.mean(RuntimeFactor),
+    VMMeanSpeedup = geometric.mean(SpeedupFactor),
+    median = median(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+  
+  list(
+    norm  = norm,
+    stats = stats,
+    vm    = stats_vm
+  )
+}
+
+stats_server <- calc_stats("Server")
+stats_core   <- calc_stats("TruffleJava_core")
+stats_special<- calc_stats("TruffleJava_specialized")
+
+
+# EXP: vms <- names(vm_names)
+overview_box_plot <- function(stats, vms, prepare_data = NULL, pre_plot = NULL) {
+  vm_stats <- subset(stats, VM %in% vms)
+  vm_stats$VM <- revalue(vm_stats$VM, vm_names)
+  vm_stats$VM <- reorder(vm_stats$VM, X=-vm_stats$VMMean)
+  #if (!is.null(prepare_data)) {
+  #  vm_stats <- prepare_data(vm_stats)
+  #}
+  # cat(levels(vm_stats$VM))
+  breaks <- levels(droplevels(vm_stats)$VM)
+  col_values <- sapply(breaks, function(x) vm_colors[[x]])
+
+  plot <- ggplot(vm_stats, aes(x=VM, y=RuntimeFactor, fill = VM))
+  if (!is.null(pre_plot)) {
+    plot <- pre_plot(plot)
+  }
+  plot <- plot +
+    geom_boxplot(outlier.size = 0.5) + #fill=get_color(5, 7)
+    stat_summary(fun.y=geometric.mean, colour="#000000", geom="point",
+                 shape=4, size=1, show.legend = FALSE) + 
+    theme_bw() + theme_simple(font_size = 8) +
+    theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+          legend.position="none",
+          axis.title.y = element_blank()) +
+    #scale_y_log10(breaks=c(1,2,3,10,20,30,50,100,200,300,500,1000)) + #limit=c(0,30), breaks=seq(0,100,5), expand = c(0,0)
+    ggtitle("Runtime Factor, normalized to Java\n(lower is better)") + coord_flip() + xlab("") +
+    scale_fill_manual(values = col_values)
+  plot
+}
+
+# EXP: stats <- subset(stats, Benchmark %in% c("Bounce", "DeltaBlue", "Permute", "Richards", "Storage", "Towers"))
+# EXP: vms   <- vms_slow
+plot_benchmarks_speedup_for_vms_faceted <- function(
+  stats, vms, ylab = "Runtime Factor, normalized to C2 on ArraySuite\n(lower is better)") {
+  vm_stats <- subset(stats, VM %in% vms)
+  vm_stats$VM <- revalue(vm_stats$VM, vm_names)
+  breaks <- levels(droplevels(vm_stats)$VM)
+  col_values <- sapply(breaks, function(x) vm_colors[[x]])
+
+  p <- ggplot(vm_stats, aes(x = Benchmark, y = RuntimeFactor, fill = VM)) +
+      geom_bar(stat = "identity", position = "dodge") +
+      geom_errorbar(aes(ymax = RuntimeFactor + RR.sd, ymin = RuntimeFactor - RR.sd), position = "dodge") + #width=1, 
+      facet_wrap(~ Suite) + #, ncol = 1, scales="free_y") +
+      theme_bw() + theme_simple(font_size = 8) + # scale_fill_manual(values=col) + coord_flip() +
+      theme(axis.text.x=element_text(angle=90, hjust = 1, vjust = 0.5)) + #legend.position="none", 
+      scale_fill_manual(values = col_values) +
+    ylab(ylab)
+  print(p)
+}
+
+upperRT <- max(subset(stats_server$stats, Suite == "ArraySuite" & VM == "TruffleJava_core" & Benchmark %in% c("Fannkuch", "Queens", "SOR"))$RuntimeFactor)
+
+per <- function (x) {
+  round((x - 1) * 100, 0)
+}
+@
+
+\newcommand{\GeomeanOverheadOfTBCOpt}{\(\Sexpr{per(geometric.mean(subset(stats_core$stats, VM == "TruffleJava_specialized" & Suite == "ArraySuite")$RuntimeFactor))}\%\)\xspace}
+\newcommand{\WorstCaseOverheadOfTBCOpt}{\(\Sexpr{per(max(subset(stats_core$stats, VM == "TruffleJava_specialized" & Suite == "ArraySuite")$RuntimeFactor))}\%\)\xspace}
+
+\newcommand{\WorstCaseOfFourBenchmarks}{\(\Sexpr{per(upperRT)}\%\)\xspace}
+
+\newcommand{\QueensOptSlowerThanTBC}{\(\Sexpr{per(subset(stats_core$stats, VM == "TruffleJava_specialized" & Benchmark == "Queens" & Suite == "ArraySuite")$RuntimeFactor)}\%\)\xspace}
+
+\newcommand{\FannkuchOptFasterThanTBC}{\(\Sexpr{per(subset(stats_core$stats, VM == "TruffleJava_specialized" & Benchmark == "Fannkuch" & Suite == "ArraySuite")$SpeedupFactor)}\%\)\xspace}
+
+
+\newcommand{\FannkuchListOptFasterThanServer}{\(\Sexpr{per(subset(stats_server$stats, VM == "TruffleJava_specialized" & Benchmark == "Fannkuch" & Suite == "ListSuite")$SpeedupFactor)}\%\)\xspace}
+\newcommand{\LUListOptFasterThanServer}{\(\Sexpr{per(subset(stats_server$stats, VM == "TruffleJava_specialized" & Benchmark == "LU" & Suite == "ListSuite")$SpeedupFactor)}\%\)\xspace}
+\newcommand{\SorListOptFasterThanServer}{\(\Sexpr{per(subset(stats_server$stats, VM == "TruffleJava_specialized" & Benchmark == "SOR" & Suite == "ListSuite")$SpeedupFactor)}\%\)\xspace}
+
+
+\newcommand{\TBCMeanSlowdown}{\(\Sexpr{per(subset(stats_server$vm, VM == "TruffleJava_core" & Suite == "ArraySuite")$VMMean)}\%\)\xspace}
+\newcommand{\TBCOptMeanSlowdown}{\(\Sexpr{per(subset(stats_server$vm, VM == "TruffleJava_specialized" & Suite == "ArraySuite")$VMMean)}\%\)\xspace}
+
+\newcommand{\TBCOptMeanListSpeedup}{\(\Sexpr{per(subset(stats_core$vm, VM == "TruffleJava_specialized" & Suite == "ListSuite")$VMMeanSpeedup)}\%\)\xspace}
+\newcommand{\TBCOptMeanListSpeedupServer}{\(\Sexpr{per(subset(stats_server$vm, VM == "TruffleJava_specialized" & Suite == "ListSuite")$VMMeanSpeedup)}\%\)\xspace}
+
+
+\def\PerfOverview{%
+<<perf-overview, fig.width=3.35, fig.height=1.35, cache=TRUE>>=
+p <- overview_box_plot(stats_server$stats, names(vm_names), pre_plot = function (p) { 
+  p + geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed") +
+      geom_hline(aes(yintercept=2), colour="#cccccc", linetype="dashed") +
+      geom_hline(aes(yintercept=3), colour="#cccccc", linetype="dashed") })
+p + facet_wrap(~ Suite)
+#+ scale_y_continuous(limit=c(0.9,12.5), breaks = c(1, 2, 3, 4, 6, 8, 10, 12))
+@
+}%
+
+\def\BenchmarkDetailsBoxplot{%
+<<benchmark-details-boxplot, fig.width=1.5, fig.height=6.4, cache=TRUE>>=
+b_stats <- subset(stats_server$stats, Benchmark != "Array" & Benchmark != "ArrayList")
+b_stats$VM <- revalue(b_stats$VM, vm_names)
+b_stats <- droplevels(subset(b_stats, VM != "Server"))
+
+plot <- ggplot(b_stats, aes(x=Benchmark, y=RuntimeFactor, fill = VM))
+
+plot <- plot +
+    geom_boxplot(outlier.size = 0.5) + #fill=get_color(5, 7)
+    stat_summary(fun.y=geometric.mean, colour="#000000", geom="point",
+                 shape=4, size=1, show.legend = FALSE) + 
+    # theme_bw() +
+    theme_simple(font_size = 8) +
+    theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+          #legend.position="none",
+          axis.title.y = element_blank()) +
+    #scale_y_log10(breaks=c(1,2,3,10,20,30,50,100,200,300,500,1000)) + #limit=c(0,30), breaks=seq(0,100,5), expand = c(0,0)
+    ggtitle("Runtime Factor, normalized to Java\n(lower is better)") + # + coord_flip() 
+    xlab("") # + scale_fill_manual(values = col_values)
+plot+ facet_wrap(~ Suite) # + scale_fill_brewer()
+@
+}%
+
+\def\BenchmarkDetailsBarchart{%
+<<benchmark-details-barchart, fig.width=3.5, fig.height=3, cache=TRUE>>=
+plot_benchmarks_speedup_for_vms_faceted(
+  subset(stats_server$stats, Benchmark != "Array" & Benchmark != "ArrayList"),
+  c("TruffleJava_core", "TruffleJava_specialized"))
+@
+}%
+
+\def\ArrayVsArrayListBarchart{
+<<array-vs-arraylist-barchart, fig.width=3.5, fig.height=3, cache=TRUE>>==
+d <- subset(data, Benchmark == "Array" | Benchmark == "ArrayList")
+
+norm <- ddply(d, ~ Unit, transform,
+              ## scaling by a constant per benchmark (this is normalizing raw data)
+              RuntimeRatio = Value / mean(Value[VM == "Server" & Benchmark=="Array"]))
+norm_l <- ddply(d, ~ Unit, transform,
+              ## scaling by a constant per benchmark (this is normalizing raw data)
+              Speedup = mean(Value[VM == "Server" & Benchmark=="ArrayList"]) / Value)
+
+stats <- ddply(norm, ~ VM + Benchmark + Suite, summarise,
+               RR.sd = sd(RuntimeRatio),
+               RuntimeFactor = mean(RuntimeRatio))  ## central estimator, is this correct?
+
+stats_l <- ddply(norm_l, ~ VM + Benchmark + Suite, summarise,
+               SS.sd = sd(Speedup),
+               SpeedupFactor = mean(Speedup))  ## central estimator, is this correct?
+
+
+## add additional VM stats to `stats` to use it for sorting
+stats <- ddply(stats, ~ VM + Suite, transform,
+    VMMean = geometric.mean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+vm_stats<-stats
+vm_stats$VM <- revalue(vm_stats$VM, vm_names)
+breaks <- levels(droplevels(vm_stats)$VM)
+col_values <- sapply(breaks, function(x) vm_colors[[x]])
+
+p <- ggplot(vm_stats, aes(x = Benchmark, y = RuntimeFactor, fill = VM)) +
+      geom_bar(stat = "identity", position = "dodge") +
+      geom_errorbar(aes(ymax = RuntimeFactor + RR.sd, ymin = RuntimeFactor - RR.sd), position = "dodge") + #width=1, 
+      theme_bw() + theme_simple(font_size = 8) + # scale_fill_manual(values=col) + coord_flip() +
+      theme(axis.text.x=element_text(angle=90, hjust = 1, vjust = 0.5)) + #legend.position="none", 
+      scale_fill_manual(values = col_values) +
+    ylab("Runtime Factor, normalized to C2 on ArraySuite\n(lower is better)")
+  print(p)
+@
+}
+ 
+\newcommand{\ArrayListOverheadServer}{\(\Sexpr{round(stats[stats$VM=="Server" & stats$Benchmark=="ArrayList",]$RuntimeFactor, 1)}\)x\xspace}
+\newcommand{\ArrayListOverheadTruffleBC}{\(\Sexpr{round(stats[stats$VM=="TruffleJava_core" & stats$Benchmark=="ArrayList",]$RuntimeFactor, 1)}\)x\xspace}
+\newcommand{\ArrayListTruffleBCOptSpeedup}{\(\Sexpr{round(stats_l[stats_l$VM=="TruffleJava_specialized" & stats_l$Benchmark=="ArrayList",]$SpeedupFactor, 1)}\)x\xspace}
+
+
+\def\StartupPlotOptVsNoOptPerVM{
+<<startup-by-noopt-per-vm-plot, fig.width=3.5, fig.height=8, cache=TRUE>>==
+startup <- ddply(full_data, ~ Benchmark + Suite + VM, transform,
+                 Ratio = Value / min(Value))
+
+startup$VM <- revalue(startup$VM, vm_names)
+
+start <- subset(startup, Iteration < 25)
+start_sum <- ddply(start, ~ Benchmark + VM, summarise,
+                   sum = sum(Ratio) / 25)
+start_geo <- ddply(start_sum, ~ VM, summarise,
+                   geo = geometric.mean(sum))
+
+# colors
+breaks     <- levels(droplevels(startup)$VM)
+col_values <- sapply(breaks, function(x) vm_colors[[x]])
+
+#, Benchmark == "LU" | Benchmark == "FFT")
+plot <- ggplot(droplevels(subset(startup)), aes(x=Iteration, y=Ratio))
+  plot <- plot + geom_line(aes(colour = VM))
+  plot <- plot + theme_simple() + theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+                                        legend.key = element_blank(),
+                                        legend.spacing = unit(0, "cm"),
+                                        legend.title=element_blank(),
+                                        axis.title.x = element_text(size = 8),
+                                        legend.position=c(0.85, .1), # legend.position=c(1.178, .45), # optimized for print
+                                        legend.background = element_rect(fill="transparent"),
+                                        plot.margin = unit(c(0, 1.6, 0, 0), "cm"))
+  plot <- plot + facet_wrap(~ Benchmark, ncol = 2) # , nrow = 2)
+  #plot <- plot + scale_x_continuous(breaks = c(0, 500, 1000)) +
+    #scale_y_continuous(breaks = c(0, 5, 10)) +
+    
+  plot <- plot + coord_cartesian(ylim = c(0, 25), xlim=c(0, 25)) +
+    scale_color_manual(values=col_values)
+plot + ylab("Iteration Time\nnormalized to Peak Performance per VM")
+@
+}
+
+\newcommand{\WarmupServer}{\(\Sexpr{round(subset(start_geo, VM == "Hotspot C2")$geo, 1)}\)x}
+\newcommand{\WarmupTBC}{\(\Sexpr{round(subset(start_geo, VM == "TruffleBC")$geo, 1)}\)x}
+\newcommand{\WarmupTBCOpt}{\(\Sexpr{round(subset(start_geo, VM == "TruffleBC opt")$geo, 1)}\)x}
