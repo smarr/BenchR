@@ -1,0 +1,159 @@
+%!TEX root = ../paper.tex
+
+<<knitr-settings, echo=FALSE, include=FALSE, cache=TRUE>>=
+# load libraries, the data, and prepare it
+if (Sys.getenv("RSTUDIO") == "1") { 
+  if (Sys.getenv("LOGNAME") == "smarr") {
+    setwd("/Users/smarr/Collab/Dominik-Aumayr/tracing-paper/evaluation")
+  } else {
+    setwd("/Users/dominikaumayr/Documents/Workspaces/OOPSLA_PAPER/evaluation")
+  }
+}
+source("../scripts/libraries.R", chdir=TRUE)
+source("../scripts/paper.R", chdir=TRUE)
+
+bench <- readRDS("acme.rds.bz2")
+
+bench$rid = seq_len(nrow(bench))
+bench <- ddply(bench, ~ VM + Iteration,
+  here(transform),
+  Request = rid - min(rid))
+
+bench$VM <- as.factor(bench$VM)
+bench$label <- as.factor(bench$label)
+bench$Iteration <- as.factor(bench$Iteration)
+
+## Assume that all benchmarks are warmed up after 100 iterations, mostly true, based on visual inspection
+bench <- droplevels(subset(bench, Request >= 250000))
+
+## Calculate mean for SOMns
+base <- bench %>%
+  filter(VM == "Untraced") %>%
+  group_by(label) %>%
+  summarise(LatencyMean = mean(Latency))
+
+norm <- bench %>%
+  left_join(base) %>%
+  group_by(label) %>%
+  transform(LatencyRatio = Latency / LatencyMean)
+  
+stats <- norm %>%
+  group_by(VM, label) %>%
+  summarise(
+    Time.ms = mean(Latency),
+    sd      = sd(Latency),
+    LatencyFactor = mean(LatencyRatio),
+    LR.sd         = sd(LatencyRatio),
+    LR.median     = median(LatencyRatio))
+
+stats$label <- revalue(stats$label, c(
+  "View Profile Information"="View Profile",
+  "logout" = "Logout",
+  "QueryFlight" = "Query Flight"))
+
+vm_stats <- stats %>%
+  group_by(VM)%>%
+  summarise(
+    gmean     = geometric.mean(LatencyFactor),
+    min       = min(LatencyFactor),
+    max       = max(LatencyFactor),
+    LF.sd     = sd(LatencyFactor),
+    LF.median = median(LatencyFactor))
+
+
+b2 <- filter(bench, VM == "Untraced", Iteration == 1)
+b2 <- count(b2, label)
+total <- sum(b2$n)
+
+frequencies <- b2 %>%
+  transform(freq = n/total)
+@
+
+\def\AcmeTracing{%
+<<acme-tracing, fig.height=2.0, fig.width=3.2>>=
+#vm_names <- vm_names[levels(stats$VM)]
+#stats$VM <- revalue(stats$VM, vm_names)
+p <- ggplot(stats, aes(label, LatencyFactor)) + coord_flip(ylim = c(0.97, 1.015))
+p <- p + geom_boxplot(outlier.size = 0.5)
+p <- p + geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed")
+p <- p + theme_bw() + theme_simple(font_size = 8) +
+    theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+          axis.text.y = element_text(vjust=0.5, hjust=1),
+          legend.position="none",
+          strip.placement = "outside",
+          axis.title.x = element_text(size = 8))
+    
+p <- p + ylab("Latency Factor\nnormalized to untraced (lower is better)") +  xlab("")# + ggtitle("")
+p
+@
+}%
+
+\newcommand{\AcmeLatencyUntracedMaxX}{
+  \Sexpr{X2(vm_stats[2,]$max)
+}\xspace}
+
+\newcommand{\AcmeLatencyUntracedMinX}{
+  \Sexpr{X2(vm_stats[2,]$min)
+}\xspace}
+
+\newcommand{\AcmeLatencyUntracedGMeanX}{
+  \Sexpr{X2(vm_stats[2,]$gmean)
+}\xspace}
+
+\newcommand{\AcmeLatencyTracedMaxX}{
+  \Sexpr{X2(vm_stats[1,]$max)
+}\xspace}
+
+\newcommand{\AcmeLatencyTracedMinX}{
+  \Sexpr{X2(vm_stats[1,]$min)
+}\xspace}
+
+\newcommand{\AcmeLatencyTracedGMeanX}{
+  \Sexpr{X2(vm_stats[1,]$gmean)
+}\xspace}
+
+
+\newcommand{\AcmeLatencyTracedGMeanP}{
+  \Sexpr{
+    per(vm_stats[1,]$gmean)
+}\%\xspace}
+
+\newcommand{\AcmeLatencyTracedMinP}{
+  \Sexpr{
+    per(vm_stats[1,]$min)
+}\%\xspace}
+
+\newcommand{\AcmeLatencyTracedMaxP}{
+  \Sexpr{
+    per(vm_stats[1,]$max)
+}\%\xspace}
+
+\newcommand{\AcmeListBookingsP}{
+  \Sexpr{X2(
+    frequencies[frequencies$label == "List Bookings",]$freq*100)
+}\%\xspace}
+
+\newcommand{\AcmeLoginP}{
+  \Sexpr{X2(
+    frequencies[frequencies$label == "Login",]$freq*100)
+}\%\xspace}
+
+\newcommand{\AcmeQueryFP}{
+  \Sexpr{X2(
+    frequencies[frequencies$label == "QueryFlight",]$freq*100)
+}\%\xspace}
+
+\newcommand{\AcmeUpdateCustomerP}{
+  \Sexpr{X2(
+    frequencies[frequencies$label == "Update Customer",]$freq)
+}\%\xspace}
+
+\newcommand{\AcmeViewProfileP}{
+  \Sexpr{X2(
+    frequencies[frequencies$label == "View Profile Information",]$freq)
+}\%\xspace}
+
+\newcommand{\AcmeLogoutP}{
+  \Sexpr{X2(
+    frequencies[frequencies$label == "logout",]$freq)
+}\%\xspace}

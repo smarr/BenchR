@@ -1,0 +1,84 @@
+%!TEX root = ../paper.tex
+
+<<knitr-settings, echo=FALSE, include=FALSE, cache=TRUE>>=
+# load libraries, the data, and prepare it
+if (Sys.getenv("RSTUDIO") == "1") { setwd("/Users/smarr/Collab/Dominik-Aumayr/tracing-paper/evaluation") }
+source("../scripts/libraries.R", chdir=TRUE)
+source("../scripts/paper.R", chdir=TRUE)
+
+data <- load_rds_file("138-awfy-9da9feb6.rds.bz2")
+
+data <- subset(data, select = c(Value, Unit, Benchmark, VM, Iteration, version, sha))
+
+data <- droplevels(subset(data, Iteration >= 100 & Iteration < 990))
+
+java <- data %>%
+  filter(VM == "Java8U66") %>%
+  group_by(Benchmark, version, sha) %>%
+  summarise(RuntimeMean = mean(Value))
+
+norm <- data %>%
+  left_join(java) %>%
+  group_by(Benchmark, version, sha) %>%
+  transform(RuntimeRatio = Value / RuntimeMean)
+  
+stats <- norm %>%
+  group_by(VM, Benchmark, version, sha) %>%
+  summarise(
+    Time.ms = mean(Value),
+    sd      = sd(Value),
+    RuntimeFactor = mean(RuntimeRatio),
+    RR.sd         = sd(RuntimeRatio),
+    RR.median     = median(RuntimeRatio))
+
+stats_vm <- stats %>%
+  group_by(VM, version, sha) %>%
+  transform(
+    VMMean = geometric.mean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+overview_box_plot <- function(vm_stats, vms, prepare_data = NULL, pre_plot = NULL, new_colors = FALSE) {
+  vm_stats <- vm_stats %>%
+    filter(VM %in% vms)
+  
+  vm_stats <- droplevels(vm_stats)
+  vm_names <- vm_names[levels(vm_stats$VM)]
+  vm_stats$VM <- revalue(vm_stats$VM, vm_names)
+  vm_stats$VM <- reorder(vm_stats$VM, X=-vm_stats$VMMean)
+  if (!is.null(prepare_data)) {
+   vm_stats <- prepare_data(vm_stats)
+  }
+  vm_stats <- droplevels(vm_stats)
+
+  breaks <- levels(vm_stats$VM)
+  # if (new_colors) {
+  #   col_values <- brewer.pal(length(breaks), "Paired")
+  # } else {
+  #   col_values <- sapply(breaks, function(x) vm_colors[[x]])
+  # }
+
+  plot <- ggplot(vm_stats, aes(x=VM, y=RuntimeFactor)) #, fill = VM
+  if (!is.null(pre_plot)) {
+    plot <- pre_plot(plot)
+  }
+  plot <- plot +
+    geom_boxplot(outlier.size = 0.5) + #fill=get_color(5, 7)
+    theme_bw() + theme_simple(font_size = 8) +
+    theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1), legend.position="none") +
+    ylab("Runtime Factor\nnormalized to Java (lower is better)") + xlab("") # + coord_flip() 
+    #+ scale_fill_manual(values = col_values)
+  plot
+}
+@
+
+\def\AwfyBaseline{%
+<<awfy-baseline, fig.height=2.2, fig.width=1.1>>=
+p <- overview_box_plot(stats_vm, c("Java8U66", "Node", "SOMns"), pre_plot = function (p) {
+  p + geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed") +
+      geom_hline(aes(yintercept=2), colour="#cccccc", linetype="dashed") +
+      geom_hline(aes(yintercept=3), colour="#cccccc", linetype="dashed") })
+p <- p + scale_y_continuous(breaks = 1:7)  # limit=c(0,13), 
+p
+@
+}%

@@ -1,0 +1,43 @@
+%!TEX root = ../paper.tex
+
+<<knitr-load, echo=FALSE, include=FALSE>>=
+if (Sys.getenv("RSTUDIO") == "1") { setwd("/Users/smarr/Collab/Dominik-Aumayr/tracing-paper/evaluation") }
+source("../scripts/libraries.R", chdir=TRUE)
+source("../scripts/paper.R", chdir=TRUE)
+
+@
+
+<<knitr-data, echo=FALSE, include=FALSE, cache=TRUE>>=
+data <- c("BankTransaction" = 1.50,
+  "BigContention" = 1.73,
+  "Chameneos" = 2.08,
+  "CigaretteSmokers" = 1.72,
+  "ConcurrentDictionary" = 1.82,
+  "ConcurrentSortedLinkedList" = 0.93,
+  "Counting" = 2.08,
+  "ForkJoinActorCreation" = 1.05,
+  "ForkJoinThroughput" = 1.62,
+  "LogisticMapSeries" = 1.94,
+  "Philosophers" = 1.96,
+  "PingPong" = 1.59,
+  "ProducerConsumerBoundedBuffer" = 1.11,
+  "RadixSort" = 1.63,
+  "SleepingBarber" = 1.20,
+  "ThreadRing" = 2.03,
+  "TrapezoidalApproximation" = 1.07,
+  "UnbalancedCobwebbedTree" = 1.98)
+  
+d <- data.frame(data)
+
+stats <- d %>%
+  summarise(
+    geomean = geometric.mean(data),
+    median = median(data),
+    sd = sd(data),
+    min = min(data),
+    max = max(data))
+@
+
+\newcommand{\RosaGMeanX}{\Sexpr{X2(stats$geomean)}x\xspace}
+\newcommand{\RosaMinX}{\Sexpr{X2(stats$min)}x\xspace}
+\newcommand{\RosaMaxX}{\Sexpr{X2(stats$max)}x\xspace}

@@ -1,0 +1,195 @@
+%!TEX root = ../paper.tex
+
+<<knitr-load, echo=FALSE, include=FALSE>>=
+if (Sys.getenv("RSTUDIO") == "1") { setwd("/Users/smarr/Collab/Dominik-Aumayr/tracing-paper/evaluation") }
+source("../scripts/libraries.R", chdir=TRUE)
+source("../scripts/paper.R", chdir=TRUE)
+@
+
+<<knitr-data, echo=FALSE, include=FALSE, cache=TRUE>>=
+# load libraries, the data, and prepare it
+
+scala <- load_rds_file("136-savina-8c3f6ec5.rds.bz2")
+scala <- droplevels(subset(scala, Suite == "savina-scala"))
+
+som18 <- load_rds_file("163-savina-be867eb6.rds.bz2")
+som246 <- load_rds_file("164-savina-f320b4f7.rds.bz2")
+
+data <- rbind(scala,
+              som18,
+              som246)
+
+## Currently there is a bug in Graal, which causes NQueens not to compile properly
+## Graal inlines to aggressively, resulting in a compilation result
+## that does not fit into the code cache.
+## Setting -Dgraal.TruffleMaximumRecursiveInlining=1 helps, but well, that's problematic)
+data <- subset(data, Benchmark != "NQueens")
+
+## For Savina benchmarks use Var for VM, makes subsequent handling easier
+data <- transform(data, VM = ifelse(VM == "Scala", as.character(Var), as.character(VM)))
+data$VM <- as.factor(data$VM)
+data$Cores <- as.factor(data$Cores)
+
+## Assume that all benchmarks are warmed up after 100 iterations, mostly true, based on visual inspection
+data <- subset(data, Iteration >= 100 & Iteration < 990)
+
+## Split into timing data and trace length data
+time_data <- subset(data, Unit == "ms" & Criterion == "total", select = c(Value, Unit, Benchmark, VM, Cores, Iteration, version, sha))
+trace_data <- subset(data, Unit == "byte", select = c(Value, Unit, Benchmark, VM, Cores, Iteration, version, sha))
+
+## Calculate mean for SOMns
+somns <- time_data %>%
+  filter(VM == "SOMns-no-tracing") %>%
+  group_by(Benchmark, Cores, version, sha) %>%
+  summarise(RuntimeMean = mean(Value))
+
+norm <- time_data %>%
+  left_join(somns) %>%
+  group_by(Benchmark, Cores, version, sha) %>%
+  transform(RuntimeRatio = Value / RuntimeMean)
+  
+stats <- norm %>%
+  group_by(VM, Benchmark, Cores, version, sha) %>%
+  summarise(
+    Time.ms = mean(Value),
+    sd      = sd(Value),
+    RuntimeFactor = mean(RuntimeRatio),
+    RR.sd         = sd(RuntimeRatio),
+    RR.median     = median(RuntimeRatio))
+
+vm_stats <- stats %>%
+  group_by(VM, Cores, version, sha) %>%
+  summarise(
+    geomean = geometric.mean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+trace <- trace_data %>%
+  filter(VM %in% c("SOMns-full-ids", "SOMns-t-sid") & Cores == 1) %>%
+  group_by(Benchmark, VM, Cores, Iteration) %>%
+  summarise(Value = sum(Value))
+
+rate <-
+  norm %>%
+  filter(VM %in% c("SOMns-full-ids", "SOMns-t-sid") & Cores == 1) %>%
+  left_join(trace, by = c("Benchmark", "VM", "Cores", "Iteration")) %>%
+  mutate(ValueBMS = Value.y / Value.x,
+         UnitBMS = "byte/ms",
+         ValueBS = Value.y / (Value.x / 1000),
+         UnitBS = "byte/s",
+         Value = (Value.y / (1024 * 1024)) / (Value.x / 1000),
+         Unit = "MB/s")
+
+rate_stats <- rate %>%
+  filter(Value != 0) %>%  # need to filter out 0 values (can be at the beginning, otherwise hmean is 0)
+  group_by(Benchmark, VM, Cores) %>%
+  summarise(hmean  = harmonic.mean(Value),
+            unit   = "MB/s",
+            max    = max(Value),
+            min    = min(Value),
+            sd     = sd(Value),
+            median = median(Value))
+
+@
+
+\def\SavinaBaseline{%
+<<savina-baseline, fig.height=2.3, fig.width=5>>=
+savina_baseline <- droplevels(subset(stats, VM %in% c("AkkaActor", "JetlangActor", "ScalazActor", "SOMns-no-tracing")))
+vm_names <- vm_names[levels(savina_baseline$VM)]
+savina_baseline$VM <- revalue(savina_baseline$VM, vm_names)
+p <- ggplot(savina_baseline, aes(VM, RuntimeFactor))
+p <- p +
+  geom_hline(aes(yintercept=0.5), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=2), colour="#cccccc", linetype="dashed") +
+  geom_boxplot(outlier.size = 0.5) +
+  facet_wrap(~Cores, nrow=1, strip.position = "bottom")
+p <- p + theme_bw() + theme_simple(font_size = 8) +
+    theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+          legend.position="none",
+          strip.placement = "outside",
+          axis.title.x = element_text(size = 8),
+          plot.margin = unit(c(0,0,0.1,0.1), "cm"))
+p <- p + ylab("Runtime Factor\nnormalized to SOMns\n(lower is better)") +  xlab("Cores")
+p <- p + coord_cartesian(ylim = c(0, 5))
+p
+@
+}%
+
+\def\SavinaTracing{%
+<<savina-tracing, fig.height=3.2, fig.width=3.3>>=
+#vm_names <- vm_names[levels(stats$VM)]
+trace_names <- c("SOMns-full-ids" = "Full Ids", "SOMns-t-sid" = "Small Ids")
+trace_data <- subset(norm, VM %in% names(trace_names))
+trace_c1 <- droplevels(subset(trace_data, Cores == 1))
+trace_c1$VM <- revalue(trace_c1$VM, trace_names)
+
+tr_colors <- brewer.pal(length(trace_names) + 1, "Paired")  ## brewer.pal needs to return at least 3 elements
+
+p <- ggplot(trace_c1, aes(Benchmark, RuntimeRatio)) +
+  geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=1.1), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=1.2), colour="#cccccc", linetype="dashed") +
+  geom_boxplot(outlier.size = 0.5,
+               outlier.alpha = 0.1,
+               aes(colour = VM)) +
+  #facet_wrap(~VM, ncol=2, strip.position = "left") +
+  #coord_cartesian() +
+  coord_flip(ylim = c(0.9, 1.5)) #
+  
+p <- p + theme_bw() + theme_simple(font_size = 8)  +
+    theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+          legend.position=c(0.87,0.9),
+          legend.title = element_blank(),
+          legend.background = element_blank(),
+          strip.placement = "outside",
+          axis.title.x = element_text(size = 8),
+          axis.title.y = element_blank(),
+          #plot.background = element_rect(colour = "lightblue"),
+          plot.margin = unit(c(0,0.1,0.1,-.5), "cm"))
+p <- p + ylab("Runtime Factor, normalized to\nuntraced SOMns (lower is better)")
+p <- p + scale_color_manual(values = tr_colors) +
+  scale_x_discrete(limits = rev(levels(trace_c1$Benchmark))) +
+  guides(colour = guide_legend(reverse=TRUE))
+p
+@
+}%
+
+\newcommand{\TraceOverheadSidGMeanX}{\Sexpr{X2(vm_stats[vm_stats$Cores == 1 & vm_stats$VM == "SOMns-t-sid",]$geomean)}x\xspace}
+\newcommand{\TraceOverheadSidMinX}{\Sexpr{X2(vm_stats[vm_stats$Cores == 1 & vm_stats$VM == "SOMns-t-sid",]$min)}x\xspace}
+\newcommand{\TraceOverheadSidMaxX}{\Sexpr{X2(vm_stats[vm_stats$Cores == 1 & vm_stats$VM == "SOMns-t-sid",]$max)}x\xspace}
+
+\newcommand{\TraceOverheadSidGMeanP}{\Sexpr{per(vm_stats[vm_stats$Cores == 1 & vm_stats$VM == "SOMns-t-sid",]$geomean)}\%\xspace}
+\newcommand{\TraceOverheadSidMinP}{\Sexpr{per(vm_stats[vm_stats$Cores == 1 & vm_stats$VM == "SOMns-t-sid",]$min)}\%\xspace}
+\newcommand{\TraceOverheadSidMaxP}{\Sexpr{per(vm_stats[vm_stats$Cores == 1 & vm_stats$VM == "SOMns-t-sid",]$max)}\%\xspace}
+
+\newcommand{\TraceOverheadFidGMeanX}{\Sexpr{X2(vm_stats[vm_stats$Cores == 1 & vm_stats$VM == "SOMns-full-ids",]$geomean)}x\xspace}
+\newcommand{\TraceOverheadFidMinX}{\Sexpr{X2(vm_stats[vm_stats$Cores == 1 & vm_stats$VM == "SOMns-full-ids",]$min)}x\xspace}
+\newcommand{\TraceOverheadFidMaxX}{\Sexpr{X2(vm_stats[vm_stats$Cores == 1 & vm_stats$VM == "SOMns-full-ids",]$max)}x\xspace}
+
+\newcommand{\TraceOverheadFidGMeanP}{\Sexpr{per(vm_stats[vm_stats$Cores == 1 & vm_stats$VM == "SOMns-full-ids",]$geomean)}\%\xspace}
+\newcommand{\TraceOverheadFidMinP}{\Sexpr{per(vm_stats[vm_stats$Cores == 1 & vm_stats$VM == "SOMns-full-ids",]$min)}\%\xspace}
+\newcommand{\TraceOverheadFidMaxP}{\Sexpr{per(vm_stats[vm_stats$Cores == 1 & vm_stats$VM == "SOMns-full-ids",]$max)}\%\xspace}
+
+
+\def\SavinaTraceDataTable{%
+<<savina-tracing-table, results='asis', echo=FALSE>>=
+rs <- rate_stats %>% 
+  filter(VM == "SOMns-t-sid") %>%
+  left_join(rate_stats %>%
+              filter(VM == "SOMns-full-ids"), by = c("Benchmark")) %>%
+  droplevels()
+
+t <- tabular(Justify("l")*Heading()*Benchmark ~
+             Heading('Harmonic Mean MB/s')*
+               Justify("r")*Format(sprintf("%.2f"))*(
+                 (Heading("Small Ids")*hmean.x + Heading("Full Ids")*hmean.y)*Heading()*identity), data=rs)
+table_options(justification="c ")
+latex(t)
+@
+}%
+
+\newcommand{\TraceRateFidMaxMBS}%
+  {\Sexpr{X0(max(filter(rate_stats, Cores == 1 & VM == "SOMns-full-ids")$hmean))}\,MB/s\xspace}
+\newcommand{\TraceRateSidMaxMBS}%
+  {\Sexpr{X0(max(filter(rate_stats, Cores == 1 & VM == "SOMns-t-sid")$hmean))}\,MB/s\xspace}
