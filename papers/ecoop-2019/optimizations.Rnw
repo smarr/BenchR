@@ -1,0 +1,121 @@
+%!TEX root = ../paper.tex
+
+<<knitr-settings, echo=FALSE, include=FALSE>>=
+# load libraries, the data, and prepare it
+if (Sys.getenv("RSTUDIO") == "1") { 
+  if (Sys.getenv("LOGNAME") == "smarr") {
+    setwd("/Users/smarr/Collab/Richard-Roberts/AliveTyping/evaluation") } }
+
+source("scripts/libraries.R", chdir=TRUE)
+source("scripts/paper.R", chdir=TRUE)
+
+
+data <- select(load_data_file("036-c658c2a2-30-in.data.bz2"),
+               c("Value", "Unit", "Benchmark", "VM", "Iteration"))
+
+
+## Assume that all benchmarks are warmed up after 100 iterations, mostly true, based on visual inspection
+data <- data %>%
+  filter((Iteration >= warmup_low_fast & Iteration < warmup_high & (VM != "Moth (neither)" & VM != "Moth (subtype cache)"))
+         | (Iteration >= warmup_low & Iteration < warmup_high & (VM == "Moth (neither)" | VM == "Moth (subtype cache)"))
+         | VM == "Higgs") %>%
+  filter(startsWith(as.character(VM), "Moth")) %>%
+  droplevels()
+
+
+untyped <- data %>%
+  filter(VM == "Moth (untyped)") %>%
+  group_by(Benchmark) %>%
+  summarise(RuntimeMean = mean(Value))
+
+both <- data %>%
+  filter(VM == "Moth (both)") %>%
+  group_by(Benchmark) %>%
+  summarise(RuntimeMean = mean(Value))
+
+
+norm_untyped <- data %>%
+  left_join(untyped, by = "Benchmark") %>%
+  group_by(Benchmark) %>%
+  transform(RuntimeRatio = Value / RuntimeMean)
+  
+norm_both <- data %>%
+  left_join(both, by = "Benchmark") %>%
+  group_by(Benchmark) %>%
+  transform(RuntimeRatio = Value / RuntimeMean)
+
+
+stats_untyped <- norm_untyped %>%
+  group_by(VM, Benchmark) %>%
+  summarise(
+    Time.ms = mean(Value),
+    sd      = sd(Value),
+    RuntimeFactor = mean(RuntimeRatio),
+    RR.sd         = sd(RuntimeRatio),
+    RR.median     = median(RuntimeRatio))
+
+stats_both <- norm_both %>%
+  group_by(VM, Benchmark) %>%
+  summarise(
+    Time.ms = mean(Value),
+    sd      = sd(Value),
+    RuntimeFactor = mean(RuntimeRatio),
+    RR.sd         = sd(RuntimeRatio),
+    RR.median     = median(RuntimeRatio))
+
+vm_stats_untyped <- stats_untyped %>%
+  group_by(VM) %>%
+  summarise(
+    geomean = geometric.mean(RuntimeFactor),
+    median = median(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+vm_stats_both <- stats_both %>%
+  group_by(VM) %>%
+  summarise(
+    geomean = geometric.mean(RuntimeFactor),
+    median = median(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+@
+
+\def\OptimizationOverview{%
+<<opt-overview, fig.height=2.5, fig.width=4.5>>=
+fixed_geomean <- function (x) {
+  # just shift values temporarily away from 0,
+  # transformation doesn't change results when using a sufficiently large constant
+  # normally, one would use simply 1, but in this case, it may change the results
+  # fixed_geomean should really only be used in the context of stat_summary
+  m <- geometric.mean(x + 10000000)
+  m - 10000000
+}
+
+baseline <- droplevels(stats_untyped)
+
+# reorder the factor
+baseline$VM <- factor(baseline$VM, levels(baseline$VM)[c(2,4,3,1,5)])
+
+p <- ggplot(baseline, aes(VM, RuntimeFactor))
+p <- p +
+  geom_hline(aes(yintercept=0.85), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=2), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=8), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=30), colour="#cccccc", linetype="dashed") +
+  geom_boxplot(outlier.size = 0.5) +
+  stat_summary(fun.y = "fixed_geomean", size = 1, colour = "#ce8080", geom = "point") +
+  scale_y_log10(breaks = c(0.85, 1, 2, 8, 30, 50, 100, 150)) +
+  coord_flip(ylim = c(0.5, 150))  # 
+p <- p + theme_bw() + theme_simple(font_size = 8) +
+    theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+          legend.position="none",
+          strip.placement = "outside",
+          axis.title.x = element_text(size = 8),
+          plot.margin = unit(c(0,0,0.1,0.1), "cm"))
+p <- p + ylab("Run-time factor, normalized to Moth (untyped)\n(lower is better)") # +  xlab("Cores")
+p
+
+@
+}%
+

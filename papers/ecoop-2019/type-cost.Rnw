@@ -1,0 +1,77 @@
+%!TEX root = ../ecoop2019/paper.tex
+
+<<knitr-settings, echo=FALSE, include=FALSE>>=
+# load libraries, the data, and prepare it
+if (Sys.getenv("RSTUDIO") == "1") { 
+  if (Sys.getenv("LOGNAME") == "smarr") {
+    setwd("/Users/smarr/Collab/Richard-Roberts/AliveTyping/evaluation") } }
+
+source("scripts/libraries.R", chdir=TRUE)
+source("scripts/paper.R", chdir=TRUE)
+
+conf_interval <- function(d) {
+  qt(0.95, df=length(d)-1) * sd(d) / sqrt(length(d))
+}
+
+data_30in <- select(load_data_file("036-c658c2a2-30-in.data.bz2"),
+                   c("Value", "Unit", "Benchmark", "VM", "Iteration", "Invocation", "InputSize")) %>%
+  filter(Benchmark == "Check" | Benchmark == "Nest")
+
+
+data2 <- data_30in %>%
+  group_by(Benchmark, VM, Iteration, InputSize) %>%
+  summarise(ValueMean = mean(Value))
+@
+
+\def\TypeCostFirstIt{%
+<<type-cost-micro-first-it, fig.height=2.5, fig.width=2.6>>=
+col_palette <- get_safe_color_palette(3)
+col_palette <- c(col_palette[[2]], col_palette[[3]], col_palette[[1]])
+
+first_it <- data_30in %>%
+  filter(Iteration == 1) %>%
+  group_by(Benchmark, VM, InputSize) %>%
+  summarise(RuntimeMean = mean(Value),
+            confMin = mean(Value) - conf_interval(Value),
+            confMax = mean(Value) + conf_interval(Value))
+
+p <- ggplot(first_it, aes(x = InputSize, y = RuntimeMean, colour = VM, fill = VM)) +
+  facet_grid(cols = vars(Benchmark)) +
+  #scale_y_log10() +
+  geom_ribbon(aes(ymin=confMin, ymax=confMax), alpha = 0.3, colour = NA) +
+  geom_line() +
+  scale_color_manual(values = col_palette) +
+  scale_fill_manual(values = col_palette)
+p + theme_simple(font_size = 8) +
+  ylab("Run time (ms)\n(lower is better)") +
+  xlab("Number of Typed Method Arguments") +
+  theme(plot.margin = unit(c(0,0,0.1,0.1), "cm"),
+        axis.title.x = element_text(size = 8),
+        legend.position = "none")
+@
+}%
+
+\def\TypeCostLastIt{%
+<<type-cost-micro-last-it, fig.height=2.5, fig.width=2.6>>=
+last_it <- data_30in %>%
+  filter(Iteration == 100) %>%
+  group_by(Benchmark, VM, InputSize) %>%
+  summarise(RuntimeMean = mean(Value),
+            confMin = mean(Value) - conf_interval(Value),
+            confMax = mean(Value) + conf_interval(Value))
+
+p <- ggplot(last_it, aes(x = InputSize, y = RuntimeMean, colour = VM, fill = VM)) +
+  facet_grid(cols = vars(Benchmark)) +
+  #scale_y_log10() +
+  geom_ribbon(aes(ymin=confMin, ymax=confMax), alpha = 0.3, colour = NA) +
+  geom_line() +
+  scale_color_manual(values = col_palette) +
+  scale_fill_manual(values = col_palette)
+p + theme_simple(font_size = 8) +
+  ylab("Run time (ms)\n(lower is better)") +
+  xlab("Number of Typed Method Arguments") +
+  theme(plot.margin = unit(c(0,0,0.1,0.1), "cm"),
+        axis.title.x = element_text(size = 8),
+        legend.position=c(0.24, 0.88))
+@
+}%

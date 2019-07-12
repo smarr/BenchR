@@ -1,0 +1,255 @@
+%!TEX root = ../ecoop2019/paper.tex
+
+<<knitr-settings, echo=FALSE, include=FALSE>>=
+# load libraries, the data, and prepare it
+if (Sys.getenv("RSTUDIO") == "1") { 
+  if (Sys.getenv("LOGNAME") == "smarr") {
+    setwd("/Users/smarr/Collab/Richard-Roberts/AliveTyping/evaluation") } }
+
+source("scripts/libraries.R", chdir=TRUE)
+source("scripts/paper.R", chdir=TRUE)
+
+data_0 <- load_data_file("036-c658c2a2-30-in.data.bz2") %>%
+  select(c("Value", "Unit", "Benchmark", "VM", "Iteration", "Invocation")) %>%
+  filter(VM == "Moth (both)" | VM == "Moth (untyped)" ) %>%
+  filter(Benchmark != "Check" & Benchmark != "Nest")
+
+data_warmup <- data_0 %>%
+  filter(Iteration <= 100) %>%
+  droplevels()
+
+data_0 <- data_0 %>%
+  filter(Iteration >= warmup_low_fast & Iteration < warmup_high) %>%
+  droplevels()
+
+
+moth <- data_0 %>%
+  filter(VM == "Moth (untyped)") %>%
+  group_by(Benchmark) %>%
+  summarise(RuntimeMean = mean(Value))
+
+moth_warmup <- data_warmup %>%
+  filter(VM == "Moth (untyped)") %>%
+  group_by(Benchmark) %>%
+  summarise(RuntimeMean = mean(Value))
+
+norm <- data_0 %>%
+  left_join(moth, by = "Benchmark") %>%
+  group_by(Benchmark) %>%
+  transform(RuntimeRatio = Value / RuntimeMean)
+
+norm_warmup <- data_warmup %>%
+  left_join(moth_warmup, by = "Benchmark") %>%
+  group_by(Benchmark) %>%
+  transform(RuntimeRatio = Value / RuntimeMean)
+
+norm_warmup <- data_warmup %>%
+  filter(VM=="Moth (both)") %>%
+  left_join(data_warmup %>% filter(VM=="Moth (untyped)"), by = c("Benchmark", "Iteration", "Unit")) %>%
+  group_by(Benchmark) %>%
+  transform(RuntimeRatio = Value.x / Value.y)
+
+
+  
+stats <- norm %>%
+  group_by(VM, Benchmark) %>%
+  summarise(
+    Time.ms = mean(Value),
+    sd      = sd(Value),
+    RuntimeFactor = mean(RuntimeRatio),
+    RR.sd         = sd(RuntimeRatio),
+    RR.median     = median(RuntimeRatio))
+
+vm_stats <- stats %>%
+  group_by(VM) %>%
+  summarise(
+    geomean = geometric.mean(RuntimeFactor),
+    median = median(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+
+
+data_w_base <- data_warmup %>%
+  filter(VM == "Moth (untyped)") %>%
+  group_by(Unit, Benchmark, Iteration) %>%
+  summarise(mean = mean(Value))
+
+norm_warmup <- data_warmup %>%
+  left_join(data_w_base, by = c("Unit", "Benchmark", "Iteration")) %>%
+  transform(RuntimeRatio = Value / mean)
+
+conf_interval <- function(d) {
+  qt(0.95, df=length(d)-1) * sd(d) / sqrt(length(d))
+}
+
+conf_warmup <- norm_warmup %>%
+  group_by(Benchmark, VM, Iteration) %>% # Iteration, Invocation?
+  summarise(RuntimeRMean = mean(RuntimeRatio),
+            confMin = mean(RuntimeRatio) - conf_interval(RuntimeRatio),
+            confMax = mean(RuntimeRatio) + conf_interval(RuntimeRatio))
+
+@
+
+\def\TypingOverhead{%
+<<typing-overhead, fig.height=3.6, fig.width=3.3>>=
+typing_overhead <- droplevels(filter(norm, VM=="Moth (both)"))
+typing_mean_overhead <- filter(vm_stats, VM=="Moth (both)")$geomean
+
+#to_vm_names <- vm_names[levels(typing_overhead$VM)]
+#typing_overhead$VM <- revalue(typing_overhead$VM, to_vm_names)
+
+p <- ggplot(typing_overhead, aes(reorder(Benchmark, desc(Benchmark)), RuntimeRatio))
+p <- p +
+  geom_hline(aes(yintercept=0.8), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=0.9), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=1.1), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=1.5), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=typing_mean_overhead), colour="#ce8080", linetype="longdash") +
+  #geom_boxplot(outlier.size = 0.2,  outlier.alpha = 0.2) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_y_log10(breaks = c(0.8, 0.9, 1, 1.1, 1.5, 2)) +
+  coord_flip(ylim = c(0.80, 2))  # 
+p <- p + theme_simple(font_size = 8) +
+    theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+          legend.position="none",
+          strip.placement = "outside",
+          axis.title.x = element_text(size = 8),
+          axis.title.y = element_blank(),
+          plot.margin = unit(c(0,0,0.1,0.1), "cm"))
+p <- p + ylab("Run-time factor, normalized to Moth (untyped)\n(lower is better)") +  xlab("")
+p
+@
+}%
+
+\def\TypingWarmup{%
+<<typing-overhead-warmup, fig.height=5, fig.width=5.5, eval = FALSE, echo = FALSE>>=
+### DISABLED, remove eval = FALSE, echo = FALSE
+
+p <- ggplot(droplevels(norm_warmup) %>% filter(Iteration < 100), aes(x=Iteration, y=RuntimeRatio)) +
+  geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed") +
+  geom_smooth(method = "loess", colour = "#888888") +
+  geom_line(colour = "black") +
+  facet_wrap(~ Benchmark, ncol = 3) +
+  coord_cartesian(ylim = c(0, 2.2))
+
+p + theme_simple(font_size = 8) + theme(
+  legend.position = "none",
+  strip.background = element_blank(),
+  panel.spacing.y = unit(0, "mm"),
+  strip.switch.pad.wrap = unit(0, "mm"),
+  axis.title.x = element_text(size = 8),
+  plot.margin = unit(c(0,0.1,0.1,0.1), "cm"),
+  panel.border = element_blank()) +
+  ylab("Run-time factor, normalized to untyped (lower is better)") +  xlab("Iterations in same VM")
+@
+}%
+
+\def\TypingWarmupPointsAndSmooth{%
+<<typing-overhead-warmup-points-smooth, fig.height=5, fig.width=5.5, eval = FALSE, echo = FALSE>>=
+### DISABLED, remove eval = FALSE, echo = FALSE
+p <- ggplot(droplevels(norm_warmup) %>% filter(Iteration < 100), aes(x=Iteration, y=RuntimeRatio)) +
+  geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed") +
+  geom_point(colour = "#999999", size=0.2) +
+  geom_smooth(method = "loess", colour = "#333333", span=0.1, size=0.5) +
+  facet_wrap(~ Benchmark, ncol = 3) +
+  coord_cartesian(ylim = c(0, 2.2))
+
+p + theme_simple(font_size = 8) + theme(
+  legend.position = "none",
+  strip.background = element_blank(),
+  panel.spacing.y = unit(0, "mm"),
+  strip.switch.pad.wrap = unit(0, "mm"),
+  axis.title.x = element_text(size = 8),
+  plot.margin = unit(c(0,0.1,0.1,0.1), "cm"),
+  panel.border = element_blank()) +
+  ylab("Run-time factor, normalized to untyped (lower is better)") +  xlab("Iterations in same VM")
+@
+}%
+
+\def\TypingWarmupMiniBoxplots{%
+<<typing-overhead-warmup-mini-boxplots, fig.height=5, fig.width=5.5, eval = FALSE, echo = FALSE>>=
+### DISABLED, remove eval = FALSE, echo = FALSE
+p <- ggplot(norm_warmup %>% filter(VM == "Moth (both)") %>% droplevels(), aes(x=Iteration, y=RuntimeRatio)) +
+  geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed") +
+  geom_boxplot(aes(group=Iteration, colour=VM), outlier.shape = NA) +
+  facet_wrap(~ Benchmark, ncol = 3) +
+  coord_cartesian(ylim = c(0, 2.2))
+
+p + theme_simple(font_size = 8) + theme(
+  legend.position = "none",
+  strip.background = element_blank(),
+  panel.spacing.y = unit(0, "mm"),
+  strip.switch.pad.wrap = unit(0, "mm"),
+  axis.title.x = element_text(size = 8),
+  plot.margin = unit(c(0,0.1,0.1,0.1), "cm"),
+  panel.border = element_blank()) +
+  ylab("Run-time factor, normalized to untyped (lower is better)") +  xlab("Iterations in same VM")
+@
+}%
+
+\def\TypingWarmupMiniViolin{%
+<<typing-overhead-warmup-mini-violin, fig.height=5, fig.width=5.5, eval = FALSE, echo = FALSE>>=
+### DISABLED, remove eval = FALSE, echo = FALSE
+
+p <- ggplot(norm_warmup %>% filter(VM == "Moth (both)") %>% droplevels(), aes(x=Iteration, y=RuntimeRatio)) +
+  geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed") +
+  geom_violin(aes(group=Iteration, colour=VM)) +
+  facet_wrap(~ Benchmark, ncol = 3) +
+  coord_cartesian(ylim = c(0, 2.2))
+
+p + theme_simple(font_size = 8) + theme(
+  legend.position = "none",
+  strip.background = element_blank(),
+  panel.spacing.y = unit(0, "mm"),
+  strip.switch.pad.wrap = unit(0, "mm"),
+  axis.title.x = element_text(size = 8),
+  plot.margin = unit(c(0,0.1,0.1,0.1), "cm"),
+  panel.border = element_blank()) +
+  ylab("Run-time factor, normalized to untyped (lower is better)") +  xlab("Iterations in same VM")
+@
+}%
+
+\def\TypingWarmupConfInterval{%
+<<typing-overhead-warmup-conf-interval, fig.height=5, fig.width=5.5>>=
+# a 95% conf interval
+p <- ggplot(conf_warmup, aes(x=Iteration, y=RuntimeRMean)) +
+  geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed") +
+  geom_ribbon(aes(ymin=confMin, ymax=confMax, fill = VM), alpha = 0.3) +
+  geom_line(aes(colour = VM)) +
+  facet_wrap(~ Benchmark, ncol = 3) +
+  coord_cartesian(ylim = c(0, 2.2)) +
+  scale_fill_manual(values = rev(get_safe_color_palette())) +
+  scale_color_manual(values = rev(get_safe_color_palette()))
+
+p + theme_simple(font_size = 8) + theme(
+  legend.position = "bottom",
+  strip.background = element_blank(),
+  panel.spacing.y = unit(0, "mm"),
+  strip.switch.pad.wrap = unit(0, "mm"),
+  axis.title.x = element_text(size = 8),
+  plot.margin = unit(c(0,0.1,0.1,0.1), "cm"),
+  panel.border = element_blank()) +
+  ylab("Run-time factor, normalized to untyped (lower is better)") +  xlab("Iterations in same VM")
+@
+}%
+
+\newcommand{\OverheadTypingGMeanX}{$\Sexpr{X1(filter(vm_stats, VM=="Moth (both)")$geomean)}$x\xspace}
+\newcommand{\OverheadTypingMinX}{$\Sexpr{X1(filter(vm_stats, VM=="Moth (both)")$min)}$x\xspace}
+\newcommand{\OverheadTypingMaxX}{$\Sexpr{X1(filter(vm_stats, VM=="Moth (both)")$max)}$x\xspace}
+
+\newcommand{\OverheadTypingGMeanP}{$\Sexpr{per(filter(vm_stats, VM=="Moth (both)")$geomean)}$\%\xspace}
+\newcommand{\OverheadTypingMinP}{$\Sexpr{per(filter(vm_stats, VM=="Moth (both)")$min)}$\%\xspace}
+\newcommand{\OverheadTypingMaxP}{$\Sexpr{per(filter(vm_stats, VM=="Moth (both)")$max)}$\%\xspace}
+
+\newcommand{\OverheadListP}{$\Sexpr{per(filter(stats, VM=="Moth (both)" & Benchmark == "List")$RuntimeFactor)}$\%\xspace}
+
+\newcommand{\OverheadPermuteP}{$\Sexpr{per(filter(stats, VM=="Moth (both)" & Benchmark == "Permute")$RuntimeFactor)}$\%\xspace}
+\newcommand{\OverheadGraphSearchP}{$\Sexpr{per(filter(stats, VM=="Moth (both)" & Benchmark == "GraphSearch")$RuntimeFactor)}$\%\xspace}
+\newcommand{\OverheadStorageP}{$\Sexpr{per(filter(stats, VM=="Moth (both)" & Benchmark == "Storage")$RuntimeFactor)}$\%\xspace}
+
+\newcommand{\OverheadRichardsP}{$\Sexpr{per(filter(stats, VM=="Moth (both)" & Benchmark == "Richards")$RuntimeFactor)}$\%\xspace}
+\newcommand{\OverheadCDP}{$\Sexpr{per(filter(stats, VM=="Moth (both)" & Benchmark == "CD")$RuntimeFactor)}$\%\xspace}
+\newcommand{\OverheadSnakeP}{$\Sexpr{per(filter(stats, VM=="Moth (both)" & Benchmark == "Snake")$RuntimeFactor)}$\%\xspace}
+\newcommand{\OverheadTowersP}{$\Sexpr{per(filter(stats, VM=="Moth (both)" & Benchmark == "Towers")$RuntimeFactor)}$\%\xspace}

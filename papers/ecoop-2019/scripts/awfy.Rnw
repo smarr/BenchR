@@ -1,0 +1,173 @@
+%!TEX root = ../paper.tex
+
+<<knitr-settings, echo=FALSE, include=FALSE>>=
+# load libraries, the data, and prepare it
+if (Sys.getenv("RSTUDIO") == "1") { 
+  if (Sys.getenv("LOGNAME") == "smarr") {
+    setwd("/Users/smarr/Collab/Richard-Roberts/AliveTyping/evaluation") } }
+
+source("scripts/libraries.R", chdir=TRUE)
+source("scripts/paper.R", chdir=TRUE)
+
+
+data <- select(load_data_file("036-c658c2a2-30-in.data.bz2"),
+               c("Value", "Unit", "Benchmark", "VM", "Iteration"))
+
+##
+## Discard Data not relevant for this analysis
+##
+
+## Assume that all benchmarks are warmed up after 100 iterations, mostly true, based on visual inspection
+data <- data %>%
+  filter((Iteration >= warmup_low_fast & Iteration < warmup_high) | VM == "Higgs") %>%
+  filter(VM != "Moth (both)" & VM != "Moth (neither)" & VM != "Moth (optimized node)" & VM != "Moth (subtype cache)")
+
+
+data <- filter(data, Benchmark %in% c("DeltaBlue",
+                                      "Richards",
+                                      "Json",
+                                      "CD",
+                                      "Havlak",
+                                      "Bounce",
+                                      "List",
+                                      "Mandelbrot",
+                                      "NBody",
+                                      "Permute",
+                                      "Queens",
+                                      "Sieve",
+                                      "Storage",
+                                      "Towers" ))
+data <- droplevels(data)
+
+##
+## Calculate statistics
+##
+
+# levels(droplevels(filter(data, VM == "MothTyped"))$Benchmark)
+
+java <- data %>%
+  filter(VM == "Java") %>%
+  group_by(Benchmark) %>%
+  summarise(RuntimeMean = mean(Value))
+
+node <- data %>%
+  filter(VM == "Node") %>%
+  group_by(Benchmark) %>%
+  summarise(RuntimeMean = mean(Value))
+
+
+norm <- data %>%
+  left_join(java, by = "Benchmark") %>%
+  group_by(Benchmark) %>%
+  transform(RuntimeRatio = Value / RuntimeMean)
+  
+norm_node <- data %>%
+  left_join(node, by = "Benchmark") %>%
+  group_by(Benchmark) %>%
+  transform(RuntimeRatio = Value / RuntimeMean)
+
+
+stats <- norm %>%
+  group_by(VM, Benchmark) %>%
+  summarise(
+    Time.ms = mean(Value),
+    sd      = sd(Value),
+    RuntimeFactor = mean(RuntimeRatio),
+    RR.sd         = sd(RuntimeRatio),
+    RR.median     = median(RuntimeRatio))
+
+stats <- stats %>%
+  group_by(VM) %>%
+  mutate(
+    VMGMean = geometric.mean(RuntimeFactor))
+
+stats_node <- norm_node %>%
+  group_by(VM, Benchmark) %>%
+  summarise(
+    Time.ms = mean(Value),
+    sd      = sd(Value),
+    RuntimeFactor = mean(RuntimeRatio),
+    RR.sd         = sd(RuntimeRatio),
+    RR.median     = median(RuntimeRatio))
+
+vm_stats <- stats %>%
+  group_by(VM) %>%
+  summarise(
+    geomean = geometric.mean(RuntimeFactor),
+    median = median(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+vm_stats_node <- stats_node %>%
+  group_by(VM) %>%
+  summarise(
+    geomean = geometric.mean(RuntimeFactor),
+    median = median(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+# View(filter(stats, VM == "Moth" | VM == "Node" | VM == "SOMns"))
+@
+
+\def\AwfyBaseline{%
+<<awfy-baseline, fig.height=2, fig.width=4.5>>=
+baseline <- droplevels(stats)
+base_names <- vm_names[levels(baseline$VM)]
+baseline$VM <- revalue(baseline$VM, base_names)
+baseline$VM <- reorder(baseline$VM, X=-baseline$VMGMean)
+
+fixed_geomean <- function (x) {
+  # just shift values temporarily away from 0,
+  # transformation doesn't change results when using a sufficiently large constant
+  # normally, one would use simply 1, but in this case, it may change the results
+  # fixed_geomean should really only be used in the context of stat_summary
+  m <- geometric.mean(x + 10000000)
+  m - 10000000
+}
+
+p <- ggplot(baseline, aes(VM, RuntimeFactor))
+p <- p +
+  geom_hline(aes(yintercept=0.75), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=2), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=3), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=4), colour="#cccccc", linetype="dashed") +
+  geom_boxplot(outlier.size = 0.5) +
+  stat_summary(fun.y = "fixed_geomean", size = 1, colour = "#ce8080", geom = "point") +
+  scale_y_log10(breaks = c(0.75, 1, 2, 3, 4, 10, 50)) +
+  coord_flip(ylim = c(0.5, 75))  # 
+p <- p + theme_bw() + theme_simple(font_size = 8) +
+    theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+          legend.position="none",
+          strip.placement = "outside",
+          axis.title.x = element_text(size = 8),
+          plot.margin = unit(c(0,0,0.1,0.1), "cm"))
+p <- p + ylab("Run-time factor, normalized to Java\n(lower is better)") # +  xlab("Cores")
+p
+@
+}%
+
+
+
+\newcommand{\OverheadNodeGMeanX}{$\Sexpr{X1(filter(vm_stats, VM=="Node")$geomean)}$x\xspace}
+\newcommand{\OverheadNodeMinX}{$\Sexpr{X1(filter(vm_stats, VM=="Node")$min)}$x\xspace}
+\newcommand{\OverheadNodeMaxX}{$\Sexpr{X1(filter(vm_stats, VM=="Node")$max)}$x\xspace}
+
+\newcommand{\OverheadMothGMeanX}{$\Sexpr{X1(filter(vm_stats, VM=="Moth (untyped)")$geomean)}$x\xspace}
+\newcommand{\OverheadMothMinX}{$\Sexpr{X1(filter(vm_stats, VM=="Moth (untyped)")$min)}$x\xspace}
+\newcommand{\OverheadMothMaxX}{$\Sexpr{X1(filter(vm_stats, VM=="Moth (untyped)")$max)}$x\xspace}
+
+\newcommand{\OverheadMothNodeGMeanX}{$\Sexpr{X1(filter(vm_stats_node, VM=="Moth (untyped)")$geomean)}$x\xspace}
+\newcommand{\OverheadMothNodeMinX}{$\Sexpr{X1(filter(vm_stats_node, VM=="Moth (untyped)")$min)}$x\xspace}
+\newcommand{\OverheadMothNodeMaxX}{$\Sexpr{X1(filter(vm_stats_node, VM=="Moth (untyped)")$max)}$x\xspace}
+
+\newcommand{\OverheadMothNodeGMeanP}{$\Sexpr{per(filter(vm_stats_node, VM=="Moth (untyped)")$geomean)}$\%\xspace}
+\newcommand{\OverheadMothNodeMinP}{$\Sexpr{per(filter(vm_stats_node, VM=="Moth (untyped)")$min)}$\%\xspace}
+\newcommand{\OverheadMothNodeMaxP}{$\Sexpr{per(filter(vm_stats_node, VM=="Moth (untyped)")$max)}$\%\xspace}
+
+\newcommand{\OverheadHiggsGMeanX}{$\Sexpr{X1(filter(vm_stats, VM=="Higgs")$geomean)}$x\xspace}
+\newcommand{\OverheadHiggsMinX}{$\Sexpr{X1(filter(vm_stats, VM=="Higgs")$min)}$x\xspace}
+\newcommand{\OverheadHiggsMaxX}{$\Sexpr{X0(filter(vm_stats, VM=="Higgs")$max)}$x\xspace}
+
+
+\newcommand{\WarmupCutOff}{$\Sexpr{warmup_low_fast}$\xspace}
