@@ -1,0 +1,173 @@
+%!TEX root = ../paper.tex
+
+<<knitr-settings, echo=FALSE, include=FALSE, cache=TRUE, message=FALSE, warning=FALSE>>=
+# load libraries, the data, and prepare it
+if (Sys.getenv("RSTUDIO") == "1") { 
+  if (Sys.getenv("LOGNAME") == "smarr") {
+    setwd("/Users/smarr/Collab/Dominik-Aumayr/Snapshot_Paper/evaluation")
+  } else {
+    setwd("/Users/dominikaumayr/Documents/Workspaces/Snapshot_Paper/evaluation")
+  }
+}
+source("../scripts/libraries.R", chdir=TRUE)
+source("../scripts/paper.R", chdir=TRUE)
+
+#java <- readRDS("awfy.rds.bz2")
+#java <- mutate(java, version = 0, sha = "")
+#num_criteria <- length(levels(java$Criterion))
+#run_nums <- seq_len(nrow(java) / num_criteria)
+#java$rid <- rep(run_nums, each = num_criteria)
+#java <- ddply(java, ~ Benchmark + VM + Var + Extra + Cores + Suite,
+#                 here(transform),
+ #                Iteration = rid - min(rid),
+  #               version = version,
+   #              sha = sha)
+#java <- droplevels(subset(java, VM == "Java8U66"))
+#java$VM <- revalue(java$VM, c("Java8U66" = "Java"))
+
+
+#nodesom <- load_data_file_new("AWFY1.bz2")
+#pharo <- load_data_file_new("AWFY2.bz2")
+#data <- rbind(nodesom, java, pharo)
+
+
+data <- readRDS("awfy_new.rds.bz2")
+
+
+data <- subset(data, select = c(Value, Unit, Benchmark, VM, Iteration, version, sha))
+data <- droplevels(subset(data, Iteration >= 100 & Iteration < 990))
+data$VM <- revalue(data$VM, c("Java8U66" = "Java", "SOMns-no-tracing" = "SOMns"))
+java <- data %>%
+  filter(VM == "Java")
+
+java <- java %>%
+  group_by(Benchmark, sha)  %>%
+  summarise(RuntimeMean = mean(Value))
+
+
+norm <- data %>%
+  left_join(java) %>%
+  group_by(Benchmark) %>%
+  transform(RuntimeRatio = Value / RuntimeMean)
+  
+stats <- norm %>%
+  group_by(VM, Benchmark) %>%
+  summarise(
+    Time.ms = mean(Value),
+    sd      = sd(Value),
+    RuntimeFactor = mean(RuntimeRatio),
+    RR.sd         = sd(RuntimeRatio),
+    RR.median     = median(RuntimeRatio))
+
+stats_vm <- stats %>%
+  group_by(VM) %>%
+  transform(
+    VMMean = geometric.mean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+
+savina_data <- readRDS("savina.rds.bz2") #load_data_file_new("011-e4a508f3.savina.awfy")
+savina_data <- droplevels(subset(savina_data, Iteration >= 100 & Iteration < 990))
+savina_data <- transform(savina_data, VM = ifelse(VM == "Scala", as.character(Var), as.character(VM)))
+savina_data$VM <- as.factor(savina_data$VM)
+savina_data$Cores <- as.factor(savina_data$Cores)
+savina_data <- subset(savina_data, Unit == "ms" & Criterion == "total", select = c(Value, Unit, Benchmark, VM, Cores, Iteration, version, sha))
+
+## Calculate mean for SOMns
+somns <- savina_data %>%
+  filter(VM == "SOMns-no-tracing") %>%
+  group_by(Benchmark, Cores, version, sha) %>%
+  summarise(RuntimeMean = mean(Value))
+
+savina_norm <- savina_data %>%
+  left_join(somns) %>%
+  group_by(Benchmark, Cores, version, sha) %>%
+  transform(RuntimeRatio = Value / RuntimeMean)
+  
+savina_stats <- savina_norm %>%
+  group_by(VM, Benchmark, Cores, version, sha) %>%
+  summarise(
+    Time.ms = mean(Value),
+    sd      = sd(Value),
+    RuntimeFactor = mean(RuntimeRatio),
+    RR.sd         = sd(RuntimeRatio),
+    RR.median     = median(RuntimeRatio))
+
+savina_vm_stats <- savina_stats %>%
+  group_by(VM, Cores, version, sha) %>%
+  summarise(
+    geomean = geometric.mean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+overview_box_plot <- function(vm_stats, vms, prepare_data = NULL, pre_plot = NULL, new_colors = FALSE) {
+  vm_stats <- vm_stats %>%
+    filter(VM %in% vms)
+  
+  vm_stats <- droplevels(vm_stats)
+  vm_names <- vm_names[levels(vm_stats$VM)]
+  vm_stats$VM <- revalue(vm_stats$VM, vm_names, warn_missing = FALSE)
+  vm_stats$VM <- reorder(vm_stats$VM, X=-vm_stats$VMMean)
+  
+  vm_stats$VM = factor(vm_stats$VM, levels(vm_stats$VM)[c(3,1,2)])
+  if (!is.null(prepare_data)) {
+   vm_stats <- prepare_data(vm_stats)
+  }
+  vm_stats <- droplevels(vm_stats)
+
+  breaks <- levels(vm_stats$VM)
+  # if (new_colors) {
+  #   col_values <- brewer.pal(length(breaks), "Paired")
+  # } else {
+  #   col_values <- sapply(breaks, function(x) vm_colors[[x]])
+  # }
+
+  plot <- ggplot(vm_stats, aes(x=VM, y=RuntimeFactor)) #, fill = VM
+  if (!is.null(pre_plot)) {
+    plot <- pre_plot(plot)
+  }
+  plot <- plot +
+    geom_boxplot(outlier.size = 0.5) + #fill=get_color(5, 7)
+    theme_bw() + theme_simple(font_size = 8) +
+    theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1), legend.position="none") +
+    ylab("Runtime Factor nnormalized to Java\n(lower is better)") + xlab("") # + coord_flip() 
+    #+ scale_fill_manual(values = col_values)
+  plot
+}
+@
+
+\def\AwfyBaseline{%
+<<awfy-baseline, fig.height=2.2, fig.width=1.4>>=
+p <- overview_box_plot(stats_vm, c("Java", "Node", "SOMns"), pre_plot = function (p) {
+  p + geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed") +
+      geom_hline(aes(yintercept=2), colour="#cccccc", linetype="dashed") +
+      geom_hline(aes(yintercept=3), colour="#cccccc", linetype="dashed")})
+p <- p + scale_y_continuous(breaks = 1:4)
+p
+@
+}%
+
+\def\SavinaBaseline{%
+<<savina-baseline, fig.height=2.3, fig.width=3.6>>=
+savina_baseline <- droplevels(subset(savina_stats, VM %in% c("AkkaActor", "JetlangActor", "ScalazActor", "SOMns-no-tracing")))
+vm_names <- vm_names[levels(savina_baseline$VM)]
+savina_baseline$VM <- revalue(savina_baseline$VM, vm_names)
+p <- ggplot(savina_baseline, aes(VM, RuntimeFactor))
+p <- p +
+  geom_hline(aes(yintercept=0.5), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=2), colour="#cccccc", linetype="dashed") +
+  geom_boxplot(outlier.size = 0.5) +
+  facet_wrap(~Cores, nrow=1, strip.position = "bottom")
+p <- p + theme_bw() + theme_simple(font_size = 8) +
+    theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+          legend.position="none",
+          strip.placement = "outside",
+          axis.title.x = element_text(size = 8),
+          plot.margin = unit(c(0,0,0.1,0.1), "cm"))
+p <- p + ylab("Runtime Factor\nnormalized to SOMns\n(lower is better)") +  xlab("Cores")
+p <- p + coord_cartesian(ylim = c(0, 5))
+p
+@
+}%

@@ -1,0 +1,438 @@
+%!TEX root = ../paper.tex
+
+<<knitr-load, echo=FALSE, include=FALSE>>=
+if (Sys.getenv("RSTUDIO") == "1") {
+  if (Sys.getenv("LOGNAME") == "smarr") {
+    setwd("/Users/smarr/Collab/Dominik-Aumayr/snapshot-paper/evaluation") }
+  else {
+    setwd("~/Users/dominikaumayr/Documents/Workspaces/Snapshot_Paper/evaluation") } }
+
+source("../scripts/libraries.R", chdir=TRUE)
+source("../scripts/paper.R", chdir=TRUE)
+@
+
+<<knitr-data, echo=FALSE, include=FALSE, cache=TRUE>>=
+# load libraries, the data, and prepare it
+
+#data2 <- readRDS("snapshot_data.rds")
+#data <- transform(data, Iteration = Iteration / Invocation)
+#data2 <- subset(data2, select = c(Value, Unit, Benchmark, VM, Iteration))
+#data2 <- subset(data2, VM == "SOMns-graal-as-t1")
+#data2$VM <- revalue(data2$VM, c("SOMns-graal-as-t1" = "Infra"))
+
+data <- load_data_file_new("codespeed15.data")
+#data2 <- load_data_file_new("codespeed13_2.data")
+#data <- subset(data, Benchmark != "BankTransaction")
+#data <- rbind(data, data2)
+
+
+data <- subset(data, select = c(Value, Unit, Criterion, Benchmark, VM, Iteration, Invocation))
+data$Benchmark <- revalue(data$Benchmark, c("ConcurrentSortedLinkedList" = "ConcurrentList", "ConcurrentDictionary" = "ConcDictionary", "ProducerConsumerBoundedBuffer" = "ProdConsumerBB", "UnbalancedCobwebbedTree" = "CobwebbedTree", 
+                                            "ForkJoinActorCreation" = "FJActorCreation", "ForkJoinThroughput" = "FJThroughput", "TrapezoidalApproximation" = "Trapezoidal"))
+
+
+#data <- rbind(data, data2)
+## Currently there is a bug in Graal, which causes NQueens not to compile properly
+## Graal inlines to aggressively, resulting in a compilation result
+## that does not fit into the code cache.
+## Setting -Dgraal.TruffleMaximumRecursiveInlining=1 helps, but well, that's problematic)
+##data <- subset(data, Benchmark != "NQueens")
+
+## For Savina benchmarks use Var for VM, makes subsequent handling easier
+##data <- transform(data, VM = ifelse(VM == "Scala", as.character(Var), as.character(VM)))
+data$VM <- as.factor(data$VM)
+##data$Cores <- as.factor(data$Cores)
+
+memdata <- subset(data, Criterion == "heap" | Criterion == "non-heap" | Criterion == "collected" | Criterion == "gc-time")
+
+
+##data <- transform(data, Iteration = Iteration %% 1000)
+
+
+data100 <- subset(data, Iteration >= 0 & Iteration < 100)
+
+## Assume that all benchmarks are warmed up after 100 iterations, mostly true, based on visual inspection
+data <- subset(data, Iteration >= 100 & Iteration < 990) 
+data <- subset(data, Unit == "ms" & Criterion == "total")
+data100 <- subset(data100, Unit == "ms" & Criterion == "total")
+## Split into timing data and trace length data
+##time_data <- subset(data, Unit == "ms" & Criterion == "total", select = c(Value, Unit, Benchmark, VM, Iteration))
+##trace_data <- subset(data, Unit == "byte", select = c(Value, Unit, Benchmark, VM, Cores, Iteration, version, sha))
+
+## Calculate mean for SOMns
+somns <- data %>%
+  filter(VM == "SOMns-graal") %>%
+  group_by(Benchmark) %>%
+  summarise(RuntimeMean = mean(Value))
+
+norm <- data %>%
+  left_join(somns) %>%
+  group_by(Benchmark) %>%
+  transform(RuntimeRatio = Value / RuntimeMean)
+  
+stats <- norm %>%
+  group_by(VM, Benchmark) %>%
+  summarise(
+    Time.ms = mean(Value),
+    sd      = sd(Value),
+    RuntimeFactor = mean(RuntimeRatio),
+    RR.sd         = sd(RuntimeRatio),
+    RR.median     = median(RuntimeRatio))
+
+vm_stats <- stats %>%
+  group_by(VM) %>%
+  summarise(
+    geomean = geometric.mean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+conf_interval <- function(d) {
+  qt(0.95, df=length(d)-1) * sd(d) / sqrt(length(d))
+}
+col_palette <- get_safe_color_palette(2)
+
+
+#Calculate memorystats
+
+#trace_names <- c("SOMns-graal" = "Baseline", "SOMns-graal-as-t1" = "Snapshots")#, "Infra" = "Infra")
+#mdat <- subset(memdata, VM %in% names(trace_names))
+#mdat <- mdat %>%
+#  group_by(Benchmark, VM, Invocation, Criterion) %>%
+#  summarise(Value = max(Value))
+#mdat <- mdat %>%
+#  group_by(Benchmark, VM, Criterion) %>%
+#  summarise(mean = mean(Value))
+
+#mdat <- tidyr::spread(mdat, Criterion, mean)
+#names(mdat)[names(mdat) == "gc-time"] <- "gctime"??
+
+#mdat_b <- mdat %>%
+#  filter(VM == "SOMns-graal") %>%
+#  group_by(Benchmark) %>%
+#  summarise(collectedMean = mean(collected),
+#            heapMean = mean(heap),
+#            gcMean = mean(gctime))
+
+#mnorm <- mdat %>%
+#  left_join(mdat_b) %>%
+#  group_by(Benchmark) %>%
+#  transform(collectedRatio = collected / collectedMean,
+#            heapRatio = heap / heapMean,
+#            gctimeRatio = gctime / gcMean)
+#mstat <- mnorm %>%
+#  filter(VM != "SOMns-graal")
+
+#mvmstat <- mstat %>%
+#  group_by(VM) %>%
+#  summarise(
+#    collectedGeomean = geometric.mean(collectedRatio),
+#    collectedMin = min(collectedRatio),
+#    collectedMax = max(collectedRatio),
+#    heapGeomean = geometric.mean(heapRatio),
+#    heapMin = min(heapRatio),
+#    heapMax = max(heapRatio),
+#    gctimeGeomean = geometric.mean(gctimeRatio),
+#    gctimeMin = min(gctimeRatio),
+#    gctimeMax = max(gctimeRatio))
+
+#Collected Bytes Analysis (WIP)
+#mdat <- mdat %>%
+#  filter(Criterion == "collected", Iteration >= 500 & Iteration < 990) %>%
+#  group_by(Benchmark, VM, Invocation) %>%
+#  summarise(Coll = (max(Value) - min(Value)) / length(Value) )#
+
+#mdat <- mdat %>%
+#  group_by(Benchmark, VM) %>%
+#  summarise(CollMean = mean(Coll/1000000),
+#            confMin = mean(Coll/1000000) - conf_interval(Coll/1000000),
+#            confMax = mean(Coll/1000000) + conf_interval(Coll/1000000))
+
+somns <- data %>%
+  filter(VM == "SOMns-graal") %>%
+  group_by(Benchmark) %>%
+  summarise(RuntimeMean = mean(Value))
+
+
+
+macro <- stats %>% filter(VM == "SOMns-graal-as-t1") %>%
+          select(Benchmark, RuntimeFactor)
+
+MinimalRF <- (min(macro$RuntimeFactor) - 1) * 100
+MaximalRF <- (max(macro$RuntimeFactor) - 1) * 100
+MaxRF <- max(macro$RuntimeFactor)
+          
+Snap_Avg_OH <- ((vm_stats %>% filter(VM == "SOMns-graal-as-t1"))$geomean - 1) *100
+SnapRR_Avg_OH <- ((vm_stats %>% filter(VM == "SOMns-graal-as-at-t1"))$geomean -1) * 100
+
+mdat <- memdata %>% 
+        filter(Benchmark == "FJThroughput" & Criterion == "gc-time") %>%
+        group_by(VM) %>%
+        summarise(max = max(Value))
+
+
+FJTmemOH <- ((mdat[3,2] - mdat[1,2])[1,1])/1000
+
+FJTtime <- (stats %>% filter(Benchmark == "FJThroughput" & VM == "SOMns-graal"))$Time.ms
+
+
+FJToh <- (stats %>% filter(Benchmark == "FJThroughput" & VM == "SOMns-graal-as-t1"))$Time.ms
+FJGCOHshare = FJTmemOH/(FJToh - FJTtime)
+
+          
+
+
+# Collected Bytes diff Plot
+#mdat <- data %>%
+#  filter(Criterion == "collected") %>%
+#  group_by(VM, Benchmark, Invocation) %>%
+#  transform(dif = Value - lag(Value, default = 0))
+#mdat <- mdat %>%
+#  filter(Iteration > 1) %>%
+#  group_by(VM, Benchmark, Iteration) %>%
+#  summarise(MemMean = mean(dif/1000000),
+#            confMin = mean(dif/1000000) - conf_interval(dif/1000000),
+#            confMax = mean(dif/1000000) + conf_interval(dif/1000000))
+#
+#p <- ggplot(mdat, aes(x = Iteration, y = MemMean, colour = VM, fill = VM)) +
+#  facet_wrap(~Benchmark, ncol=3, strip.position = "left", scales = "free") +
+#  #scale_y_log10() +
+#  geom_ribbon(aes(ymin=confMin, ymax=confMax), alpha = 0.3) +
+#  geom_line()
+#  #scale_color_manual(values = col_palette) +
+#  #scale_fill_manual(values = col_palette)
+#p + theme_simple(font_size = 8) +
+#  ylab("Collected bytes (kB)\n(lower is better)") +
+#  xlab("Itertion") +
+#  theme(plot.margin = unit(c(0,0,0.1,0.1), "cm"),
+#        axis.title.x = element_text(size = 8),
+#        legend.position = "none")
+@
+
+\def\SavinaSnapshots{%
+<<savina-snapshots, fig.height=3.2, fig.width=3.3>>=
+##vm_names <- vm_names[levels(stats$VM)]
+#trace_names <- c("SOMns-graal" = "Baseline", "SOMns-graal-as-t1" = "Snapshots", "SOMns-graal-at-t1" = "R&R", "SOMns-graal-as-at-t1" = "Snapshots + R&R")
+#trace_names <- c("SOMns-graal" = "Baseline", "SOMns-graal-as-t1" = "Snapshots", "SOMns-graal-as-at-t1" = "Snapshots + R&R")
+#trace_names <- c("SOMns-graal" = "Baseline", "SOMns-graal-as-t1" = "Snapshots", "SOMns-graal-as-at-t1" = "Snapshots + R&R","SOMns-graal-g2" = "Baseline 2", "SOMns-graal-as-t1-g2" = "Snapshots 2", "SOMns-graal-as-at-t1-g2" = "Snapshots + R&R 2")#, "Infra" = "Infra")
+trace_names <- c("SOMns-graal" = "Baseline", "SOMns-graal-as-t1" = "Snapshots", "SOMns-graal-as-at-t1" = "Snapshots\n + R\\&R")#, "Infra" = "Infra")
+
+trace_data <- subset(norm, VM %in% names(trace_names))
+#trace_data <- subset(trace_data, Benchmark != "NQueens")
+trace_data$VM <- revalue(trace_data$VM, trace_names)
+tr_colors <- get_safe_color_palette(length(trace_names))
+
+
+trace_data$VM <- factor(trace_data$VM,levels(trace_data$VM)[c(2,3,1)])
+
+#tr_colors <- brewer.pal(length(trace_names) + 1, "Paired")  ## brewer.pal needs to return at least 3 elements
+
+p <- ggplot(trace_data, aes(Benchmark, RuntimeRatio)) +
+  geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=1.5), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=2), colour="#cccccc", linetype="dashed") +
+  geom_hline(aes(yintercept=3), colour="#cccccc", linetype="dashed") +
+  geom_boxplot(outlier.size = 0.5,
+               outlier.alpha = 0.1,
+               outlier.shape = NA,
+               aes(colour = VM)) +
+  ##facet_wrap(~VM, ncol=2, strip.position = "left") +
+  ##coord_cartesian() +
+  coord_flip(ylim = c(0.75, 13.0)) #
+  
+p <- p + theme_bw() + theme_simple(font_size = 8)  +
+    theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+          legend.position=c(0.87,0.15),
+          legend.title = element_blank(),
+          legend.background = element_blank(),
+          strip.placement = "outside",
+          axis.title.x = element_text(size = 8),
+          axis.title.y = element_blank(),
+          ##plot.background = element_rect(colour = "lightblue"),
+          plot.margin = unit(c(0,0.1,0.1,0), "cm"))
+p <- p + ylab("Runtime Factor, normalized to\nbaseline SOMns (lower is better)")
+p <- p + scale_color_manual(values = tr_colors) +
+  scale_y_continuous(breaks=c(1,1.5,2,3,10,12)) +
+  scale_x_discrete(limits = rev(levels(trace_data$Benchmark))) +
+  guides(colour = guide_legend(reverse=TRUE))
+p
+@
+}%
+
+\def\SavinaWarmup{%
+<<savina-warmup, fig.height=3.75, fig.width=7>>=
+# Warmup Plot
+col_palette <- get_safe_color_palette(2)
+trace_names <- c("SOMns-graal" = "Baseline", "SOMns-graal-as-t1" = "Snapshots")#, "Infra" = "Infra")
+mdat <- subset(data100, VM %in% names(trace_names))
+mdat$VM <- revalue(mdat$VM, trace_names)
+mdat <- mdat %>%
+  group_by(Benchmark, VM, Iteration) %>%
+  summarise(Mean = mean(Value),
+            confMin = mean(Value) - conf_interval(Value),
+            confMax = mean(Value) + conf_interval(Value))
+#mdat <- mdat %>%
+#  filter(Iteration %% 10 == 1)
+
+p <- ggplot(mdat, aes(x = Iteration, y = Mean)) +
+  facet_wrap(~Benchmark, ncol=5, strip.position = "top", scales = "free") +
+  #scale_y_log10() +
+  geom_ribbon(aes(ymin=confMin, ymax=confMax, fill = VM), alpha = 0.3) +
+  geom_line(aes(y = Mean, colour = VM)) +
+  scale_color_manual(values = col_palette) +
+  scale_fill_manual(values = col_palette)
+
+p + theme_simple(font_size = 8) +
+  ylab("runtime (ms)\n(lower is better)") +
+  xlab("Itertion") +
+  theme(plot.margin = unit(c(0,0,0.1,0.1), "cm"),
+        axis.title.x = element_text(size = 8),
+        legend.text = element_text(size=8),
+        legend.title = element_blank(),
+        legend.position = c(1, 0),
+        legend.justification = c(1, 0)
+        )#legend.position = "none")
+@
+}%
+
+\def\SavinaGCTime{%
+<<savina-gctime, fig.height=3.75, fig.width=7>>=
+# GC-Time Plot
+col_palette <- get_safe_color_palette(2)
+trace_names <- c("SOMns-graal" = "Baseline", "SOMns-graal-as-t1" = "Snapshots")#, "Infra" = "Infra")
+mdat <- subset(memdata, VM %in% names(trace_names))
+mdat$VM <- revalue(mdat$VM, trace_names)
+mdat <- mdat %>%
+  filter(Criterion == "gc-time") %>%
+  group_by(Benchmark, VM, Iteration) %>%
+  summarise(MemMean = mean(Value),
+            confMin = mean(Value) - conf_interval(Value),
+            confMax = mean(Value) + conf_interval(Value))
+mdat <- mdat %>%
+  filter(Iteration %% 10 == 1)
+
+p <- ggplot(mdat, aes(x = Iteration, y = MemMean)) +
+  facet_wrap(~Benchmark, ncol=5, strip.position = "top", scales = "free") +
+  #scale_y_log10() +
+  geom_ribbon(aes(ymin=confMin, ymax=confMax, fill = VM), alpha = 0.3) +
+  geom_line(aes(y = MemMean, colour = VM)) +
+  scale_color_manual(values = col_palette) +
+  scale_fill_manual(values = col_palette)
+p + theme_simple(font_size = 8) +
+  ylab("GC time (ms)\n(lower is better)") +
+  xlab("Itertion") +
+  theme(plot.margin = unit(c(0,0,0.1,0.1), "cm"),
+        axis.title.x = element_text(size = 8),
+        legend.text = element_text(size=8),
+        legend.title = element_blank(),
+        legend.position = c(1, 0),
+        legend.justification = c(1, 0)
+        )#legend.position = "none")
+@
+}%
+
+\def\SavinaCollected{%
+<<savina-collected, fig.height=3.75, fig.width=7>>=
+# Collected Bytes Plot
+col_palette <- get_safe_color_palette(2)
+
+trace_names <- c("SOMns-graal" = "Baseline", "SOMns-graal-as-t1" = "Snapshots")#, "Infra" = "Infra")
+mdat <- subset(memdata, VM %in% names(trace_names))
+mdat$VM <- revalue(mdat$VM, trace_names)
+mdat <- mdat %>%
+  filter(Criterion == "collected") %>%
+  group_by(Benchmark, VM, Iteration) %>%
+  summarise(MemMean = mean(Value/1000000000),
+            confMin = mean(Value/1000000000) - conf_interval(Value/1000000000),
+            confMax = mean(Value/1000000000) + conf_interval(Value/1000000000))
+mdat <- mdat %>%
+  filter(Iteration %% 10 == 1)
+
+p <- ggplot(mdat, aes(x = Iteration, y = MemMean)) +
+  facet_wrap(~Benchmark, ncol=5, strip.position = "top", scales = "free") +
+  #scale_y_log10() +
+  geom_ribbon(aes(ymin=confMin, ymax=confMax, fill = VM), alpha = 0.3) +
+  geom_line(aes(y = MemMean, colour = VM)) +
+  scale_color_manual(values = col_palette) +
+  scale_fill_manual(values = col_palette)
+p + theme_simple(font_size = 8) +
+  ylab("Collected bytes (GB)\n(lower is better)") +
+  xlab("Itertion") +
+  theme(plot.margin = unit(c(0,0,0.1,0.1), "cm"),
+        axis.title.x = element_text(size = 8),
+        legend.text = element_text(size=8),
+        legend.title = element_blank(),
+        legend.position = c(1, 0),
+        legend.justification = c(1, 0)
+        )#legend.position = "none")
+@
+}%
+
+\def\SavinaHeap{%
+<<savina-heap, fig.height=3.75, fig.width=7>>=
+# Heapsize Plot
+col_palette <- get_safe_color_palette(2)
+trace_names <- c("SOMns-graal" = "Baseline", "SOMns-graal-as-t1" = "Snapshots")#, "Infra" = "Infra")
+mdat <- subset(memdata, VM %in% names(trace_names))
+mdat$VM <- revalue(mdat$VM, trace_names)
+mdat <- mdat %>%
+  filter(Criterion == "heap") %>%
+  group_by(Benchmark, VM, Iteration) %>%
+  summarise(MemMean = mean(Value/1000000),
+            confMin = mean(Value/1000000) - conf_interval(Value/1000000),
+            confMax = mean(Value/1000000) + conf_interval(Value/1000000))
+mdat <- mdat %>%
+  filter(Iteration %% 10 == 1)
+
+p <- ggplot(mdat, aes(x = Iteration, y = MemMean)) +
+  facet_wrap(~Benchmark, ncol=5, strip.position = "top", scales = "free") +
+  #scale_y_log10() +
+  geom_ribbon(aes(ymin=confMin, ymax=confMax, fill = VM), alpha = 0.3) +
+  geom_line(aes(y = MemMean, colour = VM)) +
+  scale_color_manual(values = col_palette) +
+  scale_fill_manual(values = col_palette)
+p + theme_simple(font_size = 8) +
+  ylab("Max heap size(MB)\n(lower is better)") +
+  xlab("Itertion") +
+  theme(plot.margin = unit(c(0,0,0.1,0.1), "cm"),
+        axis.title.x = element_text(size = 8),
+        legend.text = element_text(size=8),
+        legend.title = element_blank(),
+        legend.position = c(1, 0),
+        legend.justification = c(1, 0),
+        
+        )#legend.position = "none")
+@
+}%
+
+
+\newcommand{\SavinaMinOverheadP}{
+  \Sexpr{X2(MinimalRF)
+}\%\xspace}
+
+\newcommand{\SavinaMaxOverheadP}{
+  \Sexpr{X2(MaximalRF)
+}\%\xspace}
+
+\newcommand{\SavinaMaxOverhead}{
+  \Sexpr{X0(MaxRF)
+}x\xspace}
+
+\newcommand{\SavinaAvgOverheadP}{
+  \Sexpr{X2(Snap_Avg_OH)
+}\%\xspace}
+
+\newcommand{\SavinaRRAvgOverheadP}{
+  \Sexpr{X2(SnapRR_Avg_OH)
+}\%\xspace}
+
+\newcommand{\SavinaFJTGCOverheadShareP}{
+  \Sexpr{X2(FJGCOHshare*100)
+}\%\xspace}
+
+\newcommand{\SavinaFJTGCOH}{
+  \Sexpr{X2(FJTmemOH)
+}ms\xspace}
+
+\newcommand{\SavinaFJTtime}{
+  \Sexpr{X2(FJTtime)
+}ms\xspace}

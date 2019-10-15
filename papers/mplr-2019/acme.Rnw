@@ -1,0 +1,226 @@
+%!TEX root = ../paper.tex
+
+<<knitr-settings, echo=FALSE, include=FALSE, cache=TRUE>>=
+# load libraries, the data, and prepare it
+if (Sys.getenv("RSTUDIO") == "1") { 
+  if (Sys.getenv("LOGNAME") == "smarr") {
+    setwd("/Users/smarr/Collab/Dominik-Aumayr/Snapshot_Paper/evaluation")
+  } else {
+    setwd("/Users/dominikaumayr/Documents/Workspaces/Snapshot_Paper/evaluation")
+  }
+}
+source("../scripts/libraries.R", chdir=TRUE)
+source("../scripts/paper.R", chdir=TRUE)
+
+#bench <- read.csv(file="acme.data", header=TRUE, sep=",")
+#bench$rid = seq_len(nrow(bench))
+#bench <- ddply(bench, ~ VM + Iteration,
+#  here(transform),
+#  Request = rid - min(rid))
+
+#bench$VM <- as.factor(bench$VM)
+#bench$label <- as.factor(bench$label)
+#bench$Iteration <- as.factor(bench$Iteration)
+#saveRDS(bench, file = "acme3.rds.bz2", compress = "bzip2")
+
+bench <- readRDS("acme3.rds.bz2")
+
+## Assume that all benchmarks are warmed up after 100 iterations, mostly true, based on visual inspection
+bench <- droplevels(subset(bench, Request >= 100000 & Request < 2000000))
+trace_names <- c("Untraced" = "Baseline", "Traced" = "Snapshots")
+bench$VM <- revalue(bench$VM, trace_names)
+
+bench$label <- revalue(bench$label, c(
+  "View Profile Information"="View Profile",
+  "logout" = "Logout",
+  "QueryFlight" = "Query Flight"))
+
+## Calculate mean for SOMns
+base <- bench %>%
+  filter(VM == "Baseline") %>%
+  group_by(label) %>%
+  summarise(LatencyMean = mean(Latency))
+
+base <- bench %>%
+  filter(VM == "Baseline") %>%
+  group_by(label) %>%
+  summarise(LatencyMean = mean(Latency))
+
+norm <- bench %>%
+  left_join(base) %>%
+  group_by(label) %>%
+  transform(LatencyRatio = Latency / LatencyMean)
+  
+stats <- norm %>%
+  group_by(VM, label) %>%
+  summarise(
+    Time.ms = mean(Latency),
+    sd      = sd(Latency),
+    LatencyFactor = mean(LatencyRatio),
+    LR.sd         = sd(LatencyRatio),
+    LR.median     = median(LatencyRatio))
+
+vm_stats <- stats %>%
+  group_by(VM)%>%
+  summarise(
+    gmean     = geometric.mean(LatencyFactor),
+    min       = min(LatencyFactor),
+    max       = max(LatencyFactor),
+    LF.sd     = sd(LatencyFactor),
+    LF.median = median(LatencyFactor))
+
+original_100 <- sum(bench$Latency > 100 & bench$VM == "Baseline")
+snaps_100 <- sum(bench$Latency > 100 & bench$VM == "Snapshots")
+snaps_maxL <- max(bench %>% filter(VM == "Snapshots") %>%
+                   select(Latency))
+
+original_25 <- sum(bench$Latency > 25 & bench$VM == "Baseline")
+snaps_25 <- sum(bench$Latency > 25 & bench$VM == "Snapshots")
+
+original_50 <- sum(bench$Latency > 50 & bench$VM == "Baseline")
+snaps_50 <- sum(bench$Latency > 50 & bench$VM == "Snapshots")
+
+original_200 <- sum(bench$Latency > 200 & bench$VM == "Baseline")
+snaps_200 <- sum(bench$Latency > 200 & bench$VM == "Snapshots")
+
+original_400 <- sum(bench$Latency > 400 & bench$VM == "Baseline")
+snaps_400 <- sum(bench$Latency > 400 & bench$VM == "Snapshots")
+
+original_300 <- sum(bench$Latency > 300 & bench$VM == "Baseline")
+snaps_300 <- sum(bench$Latency > 300 & bench$VM == "Snapshots")
+
+original_500 <- sum(bench$Latency > 500 & bench$VM == "Baseline")
+snaps_500 <- sum(bench$Latency > 500 & bench$VM == "Snapshots")
+
+
+original_400_500 <- original_400 - original_500
+snaps_400_500 <- snaps_100 - snaps_500
+
+original_100_300 <- original_100 - original_300
+snaps_100_300 <- snaps_100 - snaps_300
+
+original_100_400 <- original_100 - original_400
+snaps_100_400 <- snaps_100 - snaps_400
+
+original_100_500 <- original_100 - original_500
+snaps_100_500 <- snaps_100 - snaps_500
+
+
+snap_fraction_100 <- (snaps_100 / 20000000) * 100
+
+increase_100_500 <-((snaps_100_500 / original_100_500) -1)*100
+increase_100 <-((snaps_100 / original_100) -1)*100
+
+
+X3 <- function(x) {
+  round(x, 3)
+}
+
+#b <- bench %>% filter(VM == "Baseline")
+#quantile(b$Latency, c(0.5, 0.75, 0.99, 0.999, 0.9999, 0.99999, 0.999999))
+
+#s <- bench %>% filter(VM == "Snapshots")
+#quantile(s$Latency, c(0.5, 0.75, 0.99, 0.999, 0.9999, 0.99999, 0.999999))
+
+
+#original <- droplevels(subset(bench, VM == "Baseline"))
+#original <- tail(original[order(original$Latency),], 1000) 
+
+#snaps <- droplevels(subset(bench, VM == "Snapshots"))
+#snaps <- tail(snaps[order(snaps$Latency),], 1000) 
+col_palette <- get_safe_color_palette(2)
+overview_plot <- function(bench, prepare_data = NULL, pre_plot = NULL, new_colors = FALSE) {
+  p <- ggplot(bench, aes(Latency, fill = VM, colour = VM))
+  p <- p + geom_freqpoly(binwidth = 1) + facet_wrap(~label,  ncol=2) +
+  #stat_ecdf(geom = "step") +
+  facet_wrap(~label,  ncol=3) + theme_linedraw() + theme_bw() + theme_minimal() +#+ theme_simple(font_size = 8)
+  scale_y_continuous(breaks=c(0,10,100,1000,10000,100000,1000000), trans='log1p') +
+  scale_color_manual(values = col_palette) + 
+  theme(axis.text.x = element_text(vjust=0.5, hjust=1,size=8),
+          axis.text.y = element_text(vjust=0.5, hjust=1,size=8),
+          #legend.position="bottom",
+          legend.text = element_text(size=8),
+          legend.title = element_blank(),
+          legend.position = c(1, 0), 
+          legend.justification = c(1, 0),
+          strip.placement = "outside",
+          axis.title.x = element_text(size = 8),
+          axis.title.y = element_text(size = 8)) + 
+    ylab("Count") +  xlab("Latency (ms)")
+  p
+}
+@
+
+\def\AcmeTracing{%
+<<acme-tracing, fig.height=3.2, fig.width=4.5>>=
+p <- overview_plot(bench)
+p
+@
+}%
+
+\def\AcmeBox{%
+<<acme-box, fig.height=2.0, fig.width=2.3>>=
+#vm_names <- vm_names[levels(stats$VM)]
+#stats$VM <- revalue(stats$VM, vm_names)
+p <- ggplot(stats, aes(label, LatencyFactor)) + coord_flip(ylim = c(1.0, 1.025))
+p <- p + geom_boxplot(outlier.size = 0.5)
+p <- p + geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed")
+p <- p + theme_bw() + theme_simple(font_size = 8) +
+    theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+          axis.text.y = element_text(vjust=0.5, hjust=1),
+          legend.position="none",
+          strip.placement = "outside",
+          axis.title.x = element_text(size = 8))
+    
+p <- p + ylab("Latency Factor\nnormalized to baseline\n(lower is better)") +  xlab("")# + ggtitle("")
+p
+@
+}%
+
+\newcommand{\AcmeLatencyTracedMaxX}{
+  \Sexpr{X2((vm_stats[1,]$max - 1) *100)
+}\%\xspace}
+
+\newcommand{\AcmeLatencySnapCntGFifty}{
+  \Sexpr{X2(snaps_50)
+}\xspace}
+
+\newcommand{\AcmeLatencySnapPSFifty}{
+  \Sexpr{X2((1.0 - (snaps_50/19000000.0))*100.0)
+}\%\xspace}
+
+\newcommand{\AcmeLatencySnapCntGHundred}{
+  \Sexpr{X2(snaps_100)
+}\xspace}
+
+\newcommand{\AcmeLatencySnapCntGTwohundred}{
+  \Sexpr{X2(snaps_200)
+}\xspace}
+
+\newcommand{\AcmeLatencySnapMax}{
+  \Sexpr{X2(snaps_maxL)
+}ms\xspace}
+
+\newcommand{\AcmeLatencyOriginalCntGFifty}{
+  \Sexpr{X2(original_50)
+}\xspace}
+
+\newcommand{\AcmeLatencyOriginalCntGHundred}{
+  \Sexpr{(original_100)
+}\xspace}
+
+\newcommand{\AcmeLatencyOriginalCntGTwohundred}{
+  \Sexpr{(original_200)
+}\xspace}
+
+\newcommand{\AcmeLatencyIncreaseHundredFHundred}{
+  \Sexpr{X2(increase_100_500)
+}\%\xspace}
+              
+\newcommand{\AcmeLatencyIncreaseHundred}{
+  \Sexpr{X2(increase_100)
+}\%\xspace}
+
+\newcommand{\AcmeLatencySHundredShare}{
+  \Sexpr{X3(snap_fraction_100)
+}\%\xspace}
