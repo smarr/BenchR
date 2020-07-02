@@ -1,9 +1,34 @@
+## Prepare R installation with the known required libraries
+
+load_and_install_if_necessary <- function(package_name) {
+  if (!suppressPackageStartupMessages(library(package_name, character.only=TRUE, logical.return=TRUE))) {
+    cat(paste0("Package ", package_name, " not found. Will install it."))
+    install.packages(package_name, repos="https://cloud.r-project.org/")
+    library(package_name, character.only=TRUE)
+  }
+}
+
+load_and_install_if_necessary("qs")
+load_and_install_if_necessary("furrr")
+load_and_install_if_necessary("purrr")
+load_and_install_if_necessary("stringr")
+load_and_install_if_necessary("dplyr")
+load_and_install_if_necessary("ggplot2")
+load_and_install_if_necessary("boot")
+load_and_install_if_necessary("ggstance")
+load_and_install_if_necessary("tidyr")
+
+# load_and_install_if_necessary("RPostgres")
+# load_and_install_if_necessary("DBI")
+
+
 # make sure the required library is loaded
-library(doBy)
-library(ggplot2)
-library(R.oo)
-library(stringr)
-library(psych)
-library(beanplot)
-library(vioplot)
-library(fields)
+# suppressPackageStartupMessages(library(plyr))
+# suppressPackageStartupMessages(library(doBy))
+# suppressPackageStartupMessages(library(ggplot2))
+# suppressPackageStartupMessages(library(R.oo))
+# suppressPackageStartupMessages(library(stringr))
+# suppressPackageStartupMessages(library(psych))
+# suppressPackageStartupMessages(library(beanplot))
+# suppressPackageStartupMessages(library(vioplot))
+# suppressPackageStartupMessages(library(fields))

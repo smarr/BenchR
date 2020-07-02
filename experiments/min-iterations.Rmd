@@ -1,0 +1,532 @@
+---
+#!Rscript ../render.R min-iterations.Rmd min-iter.html out
+title: "Analyze Benchmark Results to Determine Minimum Viable Number of Benchmark Iterations"
+output: html_notebook
+---
+
+# Is This Noise, or Does This Mean Something? #benchmarking
+## Do my measurements all me to conclude anything at all?
+
+```{r setup, echo=FALSE}
+if (!suppressPackageStartupMessages(library(here, logical.return=TRUE))) {
+  install.packages("here", repos="https://cloud.r-project.org/")
+  library(here)
+}
+source(here("libs", "common.R"), chdir = TRUE)
+```
+
+```{r load-data}
+# data1 <- load_data("https://rebench.stefan-marr.de/rebenchdb/get-exp-data/137")
+# data1 <- load_data("https://rebench.stefan-marr.de/rebenchdb/get-exp-data/37")
+data1 <- load_data("https://rebench.stefan-marr.de/rebenchdb/get-exp-data/36")
+```
+
+- load data
+- show plots for all benchmarks, displaying all iterations in slightly different shades, possibly with alpha values to see overlapping clearly
+
+```{r prep-data}
+# summary(data1)
+
+warmup_plot <- function (data_b, b, s, e) {
+  ## First take the medians over the values for each commitid separately
+  medians <- data_b %>%
+    dplyr::group_by(commitid) %>%
+    dplyr::summarise(median = median(value))
+  
+  # use the highest one with a little margin as an upper bound
+  upperBound <- 4 * max(medians$median)
+  
+  plot <- ggplot(data_b, aes(x=iteration, y=value)) +
+    geom_line(aes(colour = invocation), alpha = 0.05) +  # colour = commitid, invocation
+    scale_color_manual(values = rep("#0000ff", times = 100)) +  #color
+    # ggtitle(paste(b, s, e)) +
+    ylab(levels(data_b$unit)) +
+    # scale_x_continuous(breaks = seq(0, max(data_b$iteration), 10)) +
+    coord_cartesian(ylim=c(0, upperBound)) +
+    geom_vline(
+      xintercept = seq(0, max(data_b$iteration), 100),
+      linetype = "longdash", colour = "#cccccc") +
+    theme_simple(8) +
+    theme(legend.position=c(0.92, .92))
+  print(plot)
+}
+
+# levels(data1$bench)
+
+# benchmarks <- c("TrapezoidalApproximation", "DeltaBlue", "Json", "Loop")
+
+steady_suites <- c("macro-steady", "micro-steady", "savina-jit")
+
+data_f <- data1 %>%
+  # dplyr::filter(bench %in% benchmarks) %>%
+  dplyr::filter(suite %in% steady_suites) %>%
+  dplyr::select(-c(cores, extraargs, criterion, unit, warmup, varvalue, cmdline, inputsize,
+                   trialid, runid, expid)) %>%
+  droplevels()
+data_f$invocation <- factor(data_f$invocation)
+
+# summary(data_f)
+# levels(data_f$exe)
+# levels(data1$suite)
+
+# e <- "SOMns-graal"
+# s <- "macro-steady"
+# b <- "DeltaBlue"
+# data_b <- data_f %>%
+#   # dplyr::filter(exe == "SOMns-graal" & bench == "DeltaBlue" & suite == "macro-steady") %>%
+#   dplyr::filter(exe == "SOMns-graal" & bench == "TrapezoidalApproximation" & suite == "savina-jit") %>%
+#   #dplyr::filter(invocation <= 10) %>%
+#   droplevels()
+
+# summary(data_b)
+```
+
+Analyze the data, per benchmark/exe/suite
+- [x] what's the plain average/median per invocation
+- what's the plain average/median (over all iterations)
+- what's max difference between iterations
+- after how many iterations/invocations do we reach overall average/median
+- is minimum more stable, faster?
+- is certain percentile more stable, faster?
+
+- if i only use N iterations and M invocations, is the results for N' and M' significantly different at some point for larger values?
+- which is the smallest N and M to get to the same results as for max(N) and max(M)?
+
+```{r calc-stats}
+# based on inspection, 2000 seems a overall good value
+hot <- data_f %>%
+  dplyr::filter(iteration > 2000) %>%
+  droplevels()
+
+base <- data_f %>%
+  dplyr::group_by(exe, suite, bench) %>%
+  dplyr::summarise(
+    base_median = median(value))
+
+
+# Scaling is not useful, because it does not allow me to compare things like sd and things directly, I still need to scale those
+# norm <- data_f %>%
+#   left_join(base, by = c("exe", "suite", "bench")) %>%
+#   dplyr::group_by(exe, suite, bench) %>%
+#   dplyr::mutate(norm_val = value / base_median)
+
+stats_i <- data_f %>%
+  dplyr::group_by(exe, suite, bench, invocation) %>%
+  dplyr::summarise(
+    mean   = mean  (value),
+    median = median(value),
+    min    = min   (value),
+    # max    = max   (value),
+    q5     = quantile(value, probs = 0.05),
+    q10    = quantile(value, probs = 0.10),
+    q15    = quantile(value, probs = 0.15),
+    q20    = quantile(value, probs = 0.20),
+    q25    = quantile(value, probs = 0.25)
+  )
+
+stats <- data_f %>%
+  dplyr::group_by(exe, suite, bench) %>%
+  dplyr::summarise(
+    total_mean   = mean  (value),
+    total_median = median(value),
+    total_min    = min   (value),
+    # total_max    = max   (value),
+    total_q5     = quantile(value, probs = 0.05),
+    total_q10    = quantile(value, probs = 0.10),
+    total_q15    = quantile(value, probs = 0.15),
+    total_q20    = quantile(value, probs = 0.20),
+    total_q25    = quantile(value, probs = 0.25)
+  )
+```
+
+These Hot stats are the ground truth
+How can I determine the min(inv) and min(iter) with min(stat_hot - stat')?
+we have multiple parameters: inv, iter, warmup. Warmup for hot is guessed at 2000.
+Assumption is that warmup happens uniform over inv (strong assumption, but needed for practicality)
+Can we find a way to optimize for iter=1?
+Which of the different stats is best?
+
+I can iterate over the iter and hot variables, fine, but what to do with the
+inv? maybe at let those at 30 for the start, fixed
+Then, I could possibly sort the invs by their distance from the median or median
+If sorted by median, I can take the highest and lowest until sufficient data is reached
+
+```{r}
+stats_hot <- hot %>%
+  dplyr::group_by(exe, suite, bench) %>%
+  dplyr::summarise(
+    total_hot_median = median(value),
+    
+    total_hot_mean   = mean  (value),
+    total_hot_min    = min   (value),
+    # total_hot_max    = max   (value),
+    total_hot_q5     = quantile(value, probs = 0.05),
+    total_hot_q10    = quantile(value, probs = 0.10),
+    total_hot_q15    = quantile(value, probs = 0.15),
+    total_hot_q20    = quantile(value, probs = 0.20),
+    total_hot_q25    = quantile(value, probs = 0.25),
+    
+    diff_med_mean   = (median(value) - mean  (value)) / median(value),
+    diff_med_min    = (median(value) - min   (value)) / median(value),
+    # diff_med_max    = (median(value) - max   (value)) / median(value),
+    diff_med_q5     = (median(value) - quantile(value, probs = 0.05)) / median(value),
+    diff_med_q10    = (median(value) - quantile(value, probs = 0.10)) / median(value),
+    diff_med_q15    = (median(value) - quantile(value, probs = 0.15)) / median(value),
+    diff_med_q20    = (median(value) - quantile(value, probs = 0.20)) / median(value),
+    diff_med_q25    = (median(value) - quantile(value, probs = 0.25)) / median(value)
+  )
+
+
+warmup <- seq(1, 2000, by = 100)
+iter <- seq(1, 1000, by = 100)
+params <- crossing(warmup, iter)
+param_list <- split(params, seq(nrow(params)))
+
+plan(multisession, workers = availableCores())
+
+#stats_for_params <- purrr::map(param_list, function (p) {
+stats_for_params <- future_map(param_list, function (p, stats_hot) {
+  stats <- data_f %>%
+    dplyr::filter(iteration >= p$warmup & iteration <= (p$warmup + p$iter)) %>%
+    droplevels() %>%
+    dplyr::group_by(exe, suite, bench) %>%
+    dplyr::summarise(
+      median_ = median(value),
+      mean   = mean  (value),
+      min    = min   (value),
+      q5     = quantile(value, probs = 0.05),
+      q10    = quantile(value, probs = 0.10),
+      q15    = quantile(value, probs = 0.15),
+      q20    = quantile(value, probs = 0.20),
+      q25    = quantile(value, probs = 0.25)
+    ) %>%
+    left_join(stats_hot, by = c("exe", "suite", "bench")) %>%
+    dplyr::mutate(diff_to_hot_median = abs(total_hot_median - median_),
+                  diff_to_hot_median_ratio = abs(total_hot_median - median_) / total_hot_median)
+    
+  list(max_iter = p$warmup + p$iter,
+       warmup   = p$warmup,
+       stats    = stats)
+}, stats_hot = stats_hot)
+
+```
+
+### Next Step: Visualize the Result
+
+- I want to be able to see how the warmup/max_iter pair behaves per benchmark
+- how close to they get to the hot stat?
+- how do they behave with changing values
+  - it's per benchmark
+  - it's per stat
+  - it's 3 dimensional
+     - max_iter, warmup, stat or |hot_stat - stat|
+    - first attempt: scatter plot where |hot_stat - stat| is the color
+    
+#### How to Read these Plots?
+
+- blue indicates the closest match with the determine true median
+  (based on the `hot` stats)
+- red is indicating a larger difference
+- note that the scale adapts to the benchmark
+- all data above 5% from true median is filtered out for better visualization
+    
+```{r}
+extract_stats_for_b <- function (d, b, s, e) {
+  #summary(d)
+  max_iter <- d$max_iter
+  iter <- d$max_iter - d$warmup
+  warmup   <- d$warmup
+  data_for_b <- d$stats %>%
+    filter(bench == b & suite == s & exe == e)
+  #summary(data_for_b)
+  data.frame(max_iter, iter, warmup, data_for_b) #, data_for_b
+}
+
+plot_median_diff_from_hot <- function(b, s, e) {
+  # extract data
+  # b <- "VacationSTM"
+  # b <- "Loop"
+  # b <- "DeltaBlue"
+  # b <- "IntegerLoop"
+  # s <- "micro-steady"
+  # s <- "macro-steady"
+  # e <- "SOMns-graal"
+  
+  # d <- stats_for_params[[1]]
+  for_viz <- purrr::map_dfr(stats_for_params, extract_stats_for_b, b, s, e)
+  
+  
+  ## discard everything that's too far out of range
+  medians <- for_viz %>%
+    dplyr::summarise(median_ = median(median_))
+  
+  for_viz_filtered <- for_viz %>%
+    filter(diff_to_hot_median_ratio < 0.05)
+    ##filter((abs(medians$median_ - median_) / medians$median_) < 0.05)
+  
+  
+  
+  plot <- ggplot(for_viz_filtered, aes(x=iter, y=warmup)) +
+      #geom_line(aes(colour = invocation), alpha = 0.05) +  # colour = commitid, invocation
+      #scale_color_manual(values = rep("#0000ff", times = 100)) +  #color
+      # ggtitle(paste(b, s, e)) +
+      #ylab(levels(data_b$unit)) +
+      # scale_x_continuous(breaks = seq(0, max(data_b$iteration), 10)) +
+      #coord_cartesian(ylim=c(0, upperBound)) +
+      #geom_vline(
+      #  xintercept = seq(0, max(data_b$iteration), 100),
+      #  linetype = "longdash", colour = "#cccccc") +
+      #geom_point(aes(colour = diff_to_hot_median_ratio)) +
+      geom_tile(aes(fill = diff_to_hot_median_ratio)) +
+      #scale_fill_continuous(guide = "colourbar") +
+      #scale_color_gradientn(colors = colorRampPalette(colors = c("blue", "red"))(nrow(for_viz_filtered)), values  = scales::rescale(sort(for_viz_filtered$median))) +
+      #scale_color_gradientn(colors = colorRampPalette(colors = c("blue", "red"))(nrow(for_viz_filtered)), values  = scales::rescale(sort(for_viz_filtered$diff_to_hot_median_ratio))) +
+      #scale_color_gradientn(colors = colorRampPalette(colors = c("blue", "yellow", "red"))(nrow(for_viz_filtered)), values  = scales::rescale(sort(for_viz_filtered$diff_to_hot_median_ratio))) +
+      scale_fill_gradientn(colors = colorRampPalette(colors = c("blue", "yellow", "red"))(nrow(for_viz_filtered)), values = scales::rescale(sort(for_viz_filtered$diff_to_hot_median_ratio)),
+                           n.breaks = 15) +
+      #scale_fill_gradientn(colours = terrain.colors(10)) +
+      #scale_fill_gradient(low = "yellow", high = "red", na.value = NA) +
+      guides(fill = guide_colourbar(barheight = 20, nbins=10)) +
+      theme_simple(8)
+  #+
+      #theme(legend.position=c(0.92, .92))
+  print(plot)
+}
+```
+
+```{r median-diff-from-hot, results='asis', warning=FALSE, error=FALSE}
+options(warn=0)
+for (e in levels(data_f$exe)) {
+  data_e <- data_f %>%
+    dplyr::filter(exe == e) %>%
+    droplevels()
+  
+  # for (s in levels(data_e$suite)) {
+  for (s in steady_suites) {
+    data_s <- data_e %>%
+      dplyr::filter(suite == s) %>%
+      droplevels()
+    
+    for (b in levels(data_s$bench)) {
+      data_b <- data_s %>%
+        dplyr::filter(bench == b) %>%
+        droplevels()
+      
+      cp('<div><span class="warmup-benchmark">', b, '</span><span class="warmup-suite">', s, '</span><span class="warmup-exe">', e, '</span>')
+      cp('<div class="warmup-plot">')
+      
+      plot_median_diff_from_hot(b, s, e)
+      cp('</div></div>')
+    }
+  }
+}
+```
+
+## Identify Stable Metric
+
+Others have found the minimum run time to be the most stable metric,
+but it is unclear that this is indeed a useful metric.
+
+Therefore, we will look at a number of different metrics
+including various quantiles.
+
+The exploration of the warmup vs iteration indicates that less warmup can
+be compensated to a degree with more iterations.
+To compare metrics, I want a line plot where the y-axis shows the closeness
+to the true value, and the x axis represents how much measuring has to be done.
+
+As a first attempt, I am going to go for a diagonal through the previous
+plots, that is gradually increase `warmup` and `iter`.
+This should correspond to a diagonal through the previous plots.
+
+One could also play with the angles to afterwards look at other alternatives.
+
+```{r max-iter-fn}
+# x <- iter
+# y <- warmup = 2*iter
+# max_iter <- x + y
+
+plot_stats_diff_from_hot <- function(b, s, e) {
+  for_viz <- purrr::map_dfr(stats_for_params, extract_stats_for_b, b, s, e) %>%
+    # the -1 are becaues the values start counting at 1 which makes this a little ackward...
+    # using the abs < 101 gives use a bit more of a step function with more data,
+    # but without any duplicates for max_iter, so, it should work for plotting
+    filter(abs((warmup - 1) - (2 * (iter - 1))) < 101) %>%
+    dplyr::mutate(
+      diff_median = (total_hot_median - median_) / total_hot_median,
+      diff_mean   = (total_hot_mean   - mean)    / total_hot_mean,
+      diff_min    = (total_hot_min    - min)     / total_hot_min,
+      diff_q5   =   (total_hot_q5     - q5)      / total_hot_q5,
+      diff_q10  =   (total_hot_q10    - q10)     / total_hot_q10,
+      diff_q15  =   (total_hot_q15    - q15)     / total_hot_q15,
+      diff_q20  =   (total_hot_q20    - q20)     / total_hot_q20,
+      diff_q25  =   (total_hot_q25    - q25)     / total_hot_q25
+    )
+  
+  # TODO: reshape columns into rows or something to make plotting easier, and also the diff calculation
+  
+  plot <- ggplot(for_viz, aes(x=max_iter)) +
+    geom_hline(aes(yintercept =  0.01), color = "#666666", linetype = "dashed") +
+    geom_hline(aes(yintercept = -0.01), color = "#666666", linetype = "dashed") +
+    geom_line(aes(y = diff_min,    color = "min"),    alpha = 0.5) +
+    geom_line(aes(y = diff_q5,     color = "q05"),    alpha = 0.5) +
+    geom_line(aes(y = diff_q10,    color = "q10"),    alpha = 0.5) +
+    geom_line(aes(y = diff_q15,    color = "q15"),    alpha = 0.5) +
+    geom_line(aes(y = diff_q20,    color = "q20"),    alpha = 0.5) +
+    geom_line(aes(y = diff_q25,    color = "q25"),    alpha = 0.5) +
+    geom_line(aes(y = diff_mean,   color = "mean"),   alpha = 0.5) +
+    geom_line(aes(y = diff_median, color = "median"), alpha = 0.5) +
+    scale_color_manual(values = c(
+      median = "#66c2a5",
+      mean = "#fc8d62",
+      min = "#dadaeb",
+      q05 = "#bcbddc",
+      q10 = "#9e9ac8",
+      q15 = "#807dba",
+      q20 = "#6a51a3",
+      q25 = "#4a1486"
+    )) +
+    coord_cartesian(ylim = c(-0.05, 0.05)) +
+    theme_simple(8)
+  print(plot)
+}
+```
+
+```{r stats-diff-from-hot, results='asis', warning=FALSE, error=FALSE}
+options(warn=0)
+for (e in levels(data_f$exe)) {
+  data_e <- data_f %>%
+    dplyr::filter(exe == e) %>%
+    droplevels()
+  
+  # for (s in levels(data_e$suite)) {
+  for (s in steady_suites) {
+    data_s <- data_e %>%
+      dplyr::filter(suite == s) %>%
+      droplevels()
+    
+    for (b in levels(data_s$bench)) {
+      data_b <- data_s %>%
+        dplyr::filter(bench == b) %>%
+        droplevels()
+      
+      cp('<div><span class="warmup-benchmark">', b, '</span><span class="warmup-suite">', s, '</span><span class="warmup-exe">', e, '</span>')
+      cp('<div class="warmup-plot">')
+      
+      plot_stats_diff_from_hot(b, s, e)
+      cp('</div></div>')
+    }
+  }
+}
+```
+
+### How many invocations do I need?
+
+- what's the diff between slowest and fastest inv stats on hot?
+- 
+
+```{r prep-inv-data}
+stats_hot_i <- hot %>%
+  dplyr::group_by(exe, suite, bench, invocation) %>%
+  dplyr::summarise(
+    median = median(value),
+    
+    mean   = mean  (value),
+    min    = min   (value),
+    
+    q5     = quantile(value, probs = 0.05),
+    q10    = quantile(value, probs = 0.10),
+    q15    = quantile(value, probs = 0.15),
+    q20    = quantile(value, probs = 0.20),
+    q25    = quantile(value, probs = 0.25)
+  )
+
+stats_hot_i_stats <- stats_hot_i %>%
+  dplyr::group_by(exe, suite, bench) %>%
+  dplyr::summarise(
+    m_median          = median(median),
+    diff_median       = max(median) - min(median),
+    diff_median_ratio = (max(median) - min(median)) / median(median),
+    
+    diff_mean       = max(mean) - min(mean),
+    diff_mean_ratio = (max(mean) - min(mean)) / median(mean),
+    
+    diff_min       = max(min) - min(min),
+    diff_min_ratio = (max(min) - min(min)) / median(min),
+    
+    diff_q5        =  max(q5)  - min(q5),
+    diff_q5_ratio  = (max(q5)  - min(q5)) /  median(q5),
+    diff_q10       =  max(q10) - min(q10),
+    diff_q10_ratio = (max(q10) - min(q10)) / median(q10),
+    diff_q15       =  max(q15) - min(q15),
+    diff_q15_ratio = (max(q15) - min(q15)) / median(q15),
+    diff_q20       =  max(q20) - min(q20),
+    diff_q20_ratio = (max(q20) - min(q20)) / median(q20),
+    diff_q25       =  max(q25) - min(q25),
+    diff_q25_ratio = (max(q25) - min(q25)) / median(q25)
+  )
+
+```
+
+
+# Raw Data
+
+```{r}
+
+stats <- stats %>%
+  left_join(stats_hot, by = c("exe", "suite", "bench"))
+
+stats_i_stats <- stats_i %>%
+  dplyr::group_by(exe, suite, bench) %>%
+  dplyr::summarise(
+    iDiffMean        = max(mean) - min(mean),
+    iDiffMeanRatio   = (max(mean) - min(mean)) / mean(mean),
+    iDiffMedian      = max(median) - min(median),
+    iDiffMedianRatio = (max(median) - min(median)) / mean(median),
+     
+    meanSd = sd(mean),
+    mean   = mean(mean),
+    medianSd = sd(median),
+    median = mean(median),
+    minSd  = sd(min),
+    min    = mean(min),
+    # maxSd  = sd(max),
+    # max    = mean(max),
+    q5Sd   = sd(q5),
+    q5     = mean(q5),
+    q10Sd  = sd(q10),
+    q10    = mean(q10),
+    q15Sd  = sd(q15),
+    q15    = mean(q15),
+    q20Sd  = sd(q20),
+    q20    = mean(q20),
+    q25Sd  = sd(q25),
+    q25    = mean(q25)
+  )
+```
+
+```{r all-data, results='asis'}
+for (e in levels(data_f$exe)) {
+  data_e <- data_f %>%
+    dplyr::filter(exe == e) %>%
+    droplevels()
+  
+  # for (s in levels(data_e$suite)) {
+  for (s in steady_suites) {
+    data_s <- data_e %>%
+      dplyr::filter(suite == s) %>%
+      droplevels()
+    
+    for (b in levels(data_s$bench)) {
+      data_b <- data_s %>%
+        dplyr::filter(bench == b) %>%
+        droplevels()
+      
+      cp('<div><span class="warmup-benchmark">', b, '</span><span class="warmup-suite">', s, '</span><span class="warmup-exe">', e, '</span>')
+      cp('<div class="warmup-plot">')
+      warmup_plot(data_b, b, s, e)
+      cp('</div></div>')
+    }
+  }
+}
+```
