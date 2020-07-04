@@ -77,13 +77,22 @@ small_inline_comparison <- function (data) {
           axis.line.x.bottom=element_blank())
 }
 
+scale_force_origin_continuous <- function() {
+  list(
+    scale_x_continuous(expand = expansion(mult=0), limits = c(0, NA)),
+    scale_y_continuous(expand = expansion(mult=0), limits = c(0, NA)),
+    ## need to make some space on the right for the x axis label
+    theme(plot.margin = unit(c(0,3,0,0), "mm"))
+  )
+}
+
 ##
 ## Theme Settings
 ##
 theme_simple <- function(font_size = 8) {
   theme_bw() +
     theme(axis.text.x          = element_text(size = font_size, lineheight=0.7),
-          axis.title.x         = element_blank(),
+          axis.title.x         = element_text(size = font_size),
           axis.title.y         = element_text(size = font_size),
           axis.text.y          = element_text(size = font_size),
           axis.line            = element_line(colour = "gray"),
@@ -102,3 +111,7 @@ theme_simple <- function(font_size = 8) {
 }
 
 element90 <- function() { element_text(angle = 90, hjust = 1, vjust=0.5) }
+
+theme_no_legend <- function() {
+  theme(legend.position = "none")
+}
