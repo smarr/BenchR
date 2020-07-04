@@ -8,6 +8,10 @@ load_and_install_if_necessary <- function(package_name) {
   }
 }
 
+load_and_install_if_necessary("here")
+load_and_install_if_necessary("rmarkdown")
+load_and_install_if_necessary("knitr")
+
 load_and_install_if_necessary("qs")
 load_and_install_if_necessary("furrr")
 load_and_install_if_necessary("purrr")
