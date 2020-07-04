@@ -310,28 +310,23 @@ extract_stats_for_b <- function (d, b, s, e) {
 }
 
 plot_median_diff_from_hot <- function(b, s, e, legend_height = 20) {
-  cp("started plot_median_diff_from_hot")
   for_viz <- purrr::map_dfr(stats_for_params, extract_stats_for_b, b, s, e)
-  cp("after map_dfr")
 
   for_viz_filtered <- for_viz %>%
     filter(diff_to_hot_median_ratio <= 0.05) %>%
     mutate(diff = diff_to_hot_median_ratio * 100,
-           marked = ifelse(abs((warmup - 1) - (2 * (iter - 1))) <= 25, "marked", "unmarked"))
-  cp("after filtered")
-  summary(for_viz_filtered)
+           marked = abs((warmup - 1) - (2 * (iter - 1))) <= 25)
 
   plot <- ggplot(for_viz_filtered, aes(x=iter, y=warmup)) +
       geom_tile(aes(fill = diff)) +
       scale_fill_gradientn(colors = color_palette, limits = c(0, 5), name = "% diff") + #n.breaks = 10,
       guides(fill = guide_colourbar(barheight = legend_height, nbins=10)) +
       xlab("num. iterations") +
-      geom_point(aes(shape = marked),
-                 data = for_viz_filtered %>% filter(marked == "marked")) +
-      scale_shape_manual(values = c("marked"=3, "unmarked"=FALSE)) +
+      geom_point(shape = 3, alpha = 0.4,
+                 data = for_viz_filtered %>% filter(marked)) +
+      # scale_shape_manual(values = c("marked"=3, "unmarked"=FALSE)) +
       theme_simple(8) +
         theme(legend.title = element_text(size = 8))
-  cp("after ggplot combine")
   print(plot)
 }
 ```
