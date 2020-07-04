@@ -291,11 +291,11 @@ stats_for_params <- future_map(param_list, function (p, stats_hot, data_f) {
        stats    = stats)
 }, stats_hot = stats_hot, data_f = data_f)
 
-# end the parallel workers. mostly useful for interactive sessions
-future:::ClusterRegistry("stop")
+## end the parallel workers. mostly useful for interactive sessions
+# future:::ClusterRegistry("stop")
 ```
     
-```{r fn-plot-warmup-params, echo = FALSE, cache=FALSE}
+```{r fn-plot-warmup-params, echo=FALSE, cache=FALSE}
 color_palette <- colorRampPalette(colors = c("blue", "yellow", "red"))(length(warmup))
 
 extract_stats_for_b <- function (d, b, s, e) {
@@ -377,6 +377,13 @@ cp("<figcaption>Difference from \"true\" median in % for Vacation</figcaption>")
 cp("</figure>")
 ```
 
+Looking at these plots for all benchmarks below, we see that for quite a number,
+things look pretty good, and they have a lot of blue. Though, there are also
+a number, where we clearly see that the compilation threshold is an issue,
+and we only get closer to the "true" median, after we crossed it.
+For other benchmarks, there are a lot of parts that do not come close to the
+"true" median, like for the Vacation benchmark.
+
 ```{r median-diff-from-hot-all-data, results='asis', class.output="all-data-plots", fig.height=2.5, fig.width=3.5, cache=FALSE}
 #options(warn=0)
 #warning=FALSE, error=FALSE, 
@@ -416,17 +423,25 @@ for (e in levels(data_f$exe)) {
 }
 ```
 
+### A More Stable and Informative Metric?
 
+While the above plots give us some insight in how much warmup and number of
+iterations are needed to gets close to the "true" median,
+the precision leaves a bit to be desired.
+To make these plots readable, I also avoided to add other colors to distinguish
+between values below and above the "true" median.
 
+Originally, I wanted to introduce also the use of [bootstrapping](https://en.wikipedia.org/wiki/Bootstrapping_(statistics)) here,
+which would avoid making unsupported assumptions about the distribution of
+measurements.
+Unfortunately, it turned out to be impractical with the large data sets at hand.
+Instead, I'll look at a few quantiles, the arithmetic mean, and minimum.
+The minimum has been shown before as a metric that stabilizes fast, though,
+I assume that it does hide possibly important changes in practice.
 
-TODO(2020-07-03)
- - mark the steps we want to use for the next experiments
-
-
-TODO(2020-07-03)
- - add bootstrapped median
- - add bootstrapped upper/lower
-   - the dplyr mutate() should allow using multiple return values, I blieve
+To investigate these metrics,
+I will look at the pairs of warmup and number of iterations that fall roughly
+on the diagonal of the plots in the last section, indicated by the crosses.
 
 
 Analyze the data, per benchmark/exe/suite
@@ -441,31 +456,61 @@ Analyze the data, per benchmark/exe/suite
 - which is the smallest N and M to get to the same results as for max(N) and max(M)?
 
 ```{r calc-stats, eval = FALSE, echo = FALSE}
+# plan(multisession, workers = availableCores() / 2)
+
+diagonal <- params %>%
+  filter(abs((warmup - 1) - (2 * (iter - 1))) <= 25) %>%
+  mutate(max_iter = warmup + iter)
+  # %>%
+  # filter(max_iter > 1750, max_iter <= 2000)
+
+diagonal_list <- split(diagonal, seq(nrow(diagonal)))
+
+calc_all_stats <- function(value) {
+  median_ <- median(value)
+  mean    <- mean(value)
+  min     <- min(value)
+  q       <- quantile(value, probs = c(0.05, 0.10, 0.15, 0.20, 0.25))
+  # bca100  <- get_bca(value,    100)
+  # bca1000 <- get_bca(value,   1000)
+  # bca10000 <- get_bca(value, 10000)
+  data.frame(median = median_,
+             mean = mean,
+             min = min,
+             q5 = q[[1]], q10 = q[[2]], q15 = q[[3]], q20 = q[[4]], q25 = q[[5]]
+             #,
+             #b100.m   = bca100$median,   b100.l   = bca100$lower,   b100.u   = bca100$upper
+             #, 
+             # b1000.m  = bca1000$median,  b1000.l  = bca1000$lower,  b1000.u  = bca1000$upper,
+             # b10000.m = bca10000$median, b10000.l = bca10000$lower, b10000.u = bca10000$upper
+             )
+}
+
 # based on inspection, 2000 seems a overall good value
-stats_for_params <- future_map(param_list, function (p, stats_hot, data_f) {
+stats_for_diagonal <- future_map(diagonal_list, function (p, stats_hot, data_f) {
   stats <- data_f %>%
     dplyr::filter(iteration >= p$warmup & iteration <= (p$warmup + p$iter)) %>%
     droplevels() %>%
     dplyr::group_by(exe, suite, bench) %>%
-    dplyr::summarise(
-      median_ = median(value),
-      mean   = mean  (value),
-      min    = min   (value),
-      q5     = quantile(value, probs = 0.05),
-      q10    = quantile(value, probs = 0.10),
-      q15    = quantile(value, probs = 0.15),
-      q20    = quantile(value, probs = 0.20),
-      q25    = quantile(value, probs = 0.25)
-    ) %>%
-    left_join(stats_hot, by = c("exe", "suite", "bench")) %>%
-    dplyr::mutate(diff_to_hot_median = abs(total_hot_median - median_),
-                  diff_to_hot_median_ratio = abs(total_hot_median - median_) / total_hot_median)
+    dplyr::summarise(calc_all_stats(value),  .groups = "drop") %>%
+    left_join(stats_hot, by = c("exe", "suite", "bench"))
+  # %>%
+  #  dplyr::mutate(diff_to_hot_median = abs(total_hot_median - median_),
+  #                diff_to_hot_median_ratio = abs(total_hot_median - median_) / total_hot_median)
     
   list(max_iter = p$warmup + p$iter,
        warmup   = p$warmup,
        stats    = stats)
 }, stats_hot = stats_hot, data_f = data_f)
 
+summary(data_f)
+data_p <- data_f %>%
+  filter(exe == "SOMns-graal", suite == "macro-steady", bench == "CD") %>%
+  droplevels()
+
+get_bca((data_p %>% dplyr::filter(iteration >= 1000 & iteration <= 1500))$value, 100)
+
+# future:::ClusterRegistry("stop")
 
 base <- data_f %>%
   dplyr::group_by(exe, suite, bench) %>%
@@ -549,7 +594,7 @@ One could also play with the angles to afterwards look at other alternatives.
 
 plot_stats_diff_from_hot <- function(b, s, e) {
   for_viz <- purrr::map_dfr(stats_for_params, extract_stats_for_b, b, s, e) %>%
-    # the -1 are becaues the values start counting at 1 which makes this a little ackward...
+    # the -1 are because the values start counting at 1 which makes this a little ackward...
     # using the abs < 101 gives use a bit more of a step function with more data,
     # but without any duplicates for max_iter, so, it should work for plotting
     filter(abs((warmup - 1) - (2 * (iter - 1))) < 101) %>%
@@ -705,6 +750,12 @@ stats_i_stats <- stats_i %>%
     q25    = mean(q25)
   )
 ```
+
+
+TODO(2020-07-04)
+ - does it make sense to somehow measure the distance of specific metrics
+   from the metrics for specific iterations?
+   I'd think so, not yet sure how to do that
 
 
 ## Further Reading
