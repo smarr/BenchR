@@ -471,18 +471,11 @@ calc_all_stats <- function(value) {
   mean    <- mean(value)
   min     <- min(value)
   q       <- quantile(value, probs = c(0.05, 0.10, 0.15, 0.20, 0.25))
-  # bca100  <- get_bca(value,    100)
-  # bca1000 <- get_bca(value,   1000)
-  # bca10000 <- get_bca(value, 10000)
+
   data.frame(median = median_,
              mean = mean,
              min = min,
              q5 = q[[1]], q10 = q[[2]], q15 = q[[3]], q20 = q[[4]], q25 = q[[5]]
-             #,
-             #b100.m   = bca100$median,   b100.l   = bca100$lower,   b100.u   = bca100$upper
-             #, 
-             # b1000.m  = bca1000$median,  b1000.l  = bca1000$lower,  b1000.u  = bca1000$upper,
-             # b10000.m = bca10000$median, b10000.l = bca10000$lower, b10000.u = bca10000$upper
              )
 }
 
