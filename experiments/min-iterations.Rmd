@@ -1,85 +1,438 @@
 ---
 #!Rscript ../render.R min-iterations.Rmd min-iter.html out
-title: "Analyze Benchmark Results to Determine Minimum Viable Number of Benchmark Iterations"
+title: "Is This Noise, or Does This Mean Something? #benchmarking"
+#title: "Analyze Benchmark Results to Determine Minimum Viable Number of Benchmark Iterations"
 output: html_notebook
 ---
 
 # Is This Noise, or Does This Mean Something? #benchmarking
-## Do my measurements all me to conclude anything at all?
+## Do my performance measurements allow me to conclude anything at all?
 
-```{r setup, echo=FALSE}
+For the development of various research languages ([SOM], [SOMns], ...) we have
+used continuous performance tracking for the better part of the last decade.
+
+One should think, we would know what we are doing.
+
+For the last half year, I have been using [ReBenchDB] to track performance,
+and use the same statistical tools, that I am using for academic research
+papers. While it's a great tool, and built for exactly what I want to do,
+it made me question more strongly than before whether I can even trust these
+benchmark results.
+
+![Screenshort of ReBenchDB showing the results of an experiment](min-iterations-figures/rebenchdb.png){height=300px}
+
+The screenshot shows a table of the benchmark results of an experiment
+for which I would like to know whether it changes the performance
+of my language implementation.
+I picked a section [from the full report](https://rebench.stefan-marr.de/compare/SOMns/546c1f8e011e1c4671f375b7dc76c97acfb4e428/ef8d51508b48b00f79bc50a63712b174745d103d) showing microbenchmarks, since I would expect
+them to be the simplest to explain.
+
+On first inspection, the results seem mixed. We got two benchmarks marked as red and three as green,
+which may indicate slowdowns and speedups.
+Though, a closer look at the boxplots indicates that we can't really draw
+any strong conclusions. The boxes pretty much overlap, and my experience tells 
+me that this may as well just be noise. I have seen similar ups and downs
+rather frequently on these benchmarks.
+
+This kind of means, I can't tell with any kind of confidence whether the change
+I tried to benchmark has any kind of positive or negative consequences for
+performance. The only thing I can tell is that nothing went terribly wrong.
+I guess that's at least something.
+
+One option may perhaps be to let the benchmarks run for longer.
+Currently, it takes about 40min for the benchmark setup to run.
+If the reliability of the results could be increase,
+perhaps running the benchmarks for an hour may still be good enough.
+Much longer run times will just mean that benchmarking will be ignored,
+so, there's really an upper limit on how long things can take.
+Another option might be adding more benchmarking machines, though,
+currently, there's no budget for that either.
+
+So, what would it take to improve the reliability of my benchmarks
+and get numbers that I can trust more readily?
+
+### Gathering More Data to Understand What's Going On
+
+The benchmarking setup I am using relies on [ReBench]. This means,
+in the ideal case, I can simply ask ReBench to execute every benchmarks for 3000
+iterations and repeat this 30. Since I know that compilation triggers after
+1000 iterations, this should give us fully warmed up execution.
+Having everything executed 30, i.e., using 30 invocations should make sure that
+any variation accross different invocations can also be determined reliably.
+
+This should be all we need to change about the setup:
+
+```shell
+rebench --invocation=30 --iteration=3000 rebench.conf
+```
+
+Now it's sit back and wait. In my case, the whole run took about 7.5 days.
+Not something that's practical for everyday development...
+
+### Get a Bit of an Overview of All the Data
+
+Once we have the data, I like to get an overall impression of how things look.
+A line chart that shows the iterations on the x-axis and the run time of
+an iteration in milliseconds on the y-axis should do the job.
+
+Though, we got 30 invocations for every benchmark. To see how these invocations
+differ, I'll plot them all but make the lines transparent, which should allow
+us to see when the behavior changes.
+
+```{r setup, echo=FALSE, include=FALSE}
 if (!suppressPackageStartupMessages(library(here, logical.return=TRUE))) {
   install.packages("here", repos="https://cloud.r-project.org/")
   library(here)
 }
 source(here("libs", "common.R"), chdir = TRUE)
-```
 
-```{r load-data}
 # data1 <- load_data("https://rebench.stefan-marr.de/rebenchdb/get-exp-data/137")
-# data1 <- load_data("https://rebench.stefan-marr.de/rebenchdb/get-exp-data/37")
-data1 <- load_data("https://rebench.stefan-marr.de/rebenchdb/get-exp-data/36")
-```
+data1 <- load_data("https://rebench.stefan-marr.de/rebenchdb/get-exp-data/37")
+#data2 <- load_data("https://rebench.stefan-marr.de/rebenchdb/get-exp-data/36")
 
-- load data
-- show plots for all benchmarks, displaying all iterations in slightly different shades, possibly with alpha values to see overlapping clearly
 
-```{r prep-data}
-# summary(data1)
-
-warmup_plot <- function (data_b, b, s, e) {
+warmup_plot <- function (data_b, upper_bound = 3, highlight_invocation = 4) {
   ## First take the medians over the values for each commitid separately
-  medians <- data_b %>%
+  ## use the highest one with a little margin as an upper bound
+  upperBound <- (data_b %>%
     dplyr::group_by(commitid) %>%
-    dplyr::summarise(median = median(value))
-  
-  # use the highest one with a little margin as an upper bound
-  upperBound <- 4 * max(medians$median)
+    dplyr::summarise(median = median(value), .groups = "drop_last") %>%
+    dplyr::summarise(upperBound = max(median) * upper_bound))$upperBound
   
   plot <- ggplot(data_b, aes(x=iteration, y=value)) +
-    geom_line(aes(colour = invocation), alpha = 0.05) +  # colour = commitid, invocation
-    scale_color_manual(values = rep("#0000ff", times = 100)) +  #color
-    # ggtitle(paste(b, s, e)) +
-    ylab(levels(data_b$unit)) +
-    # scale_x_continuous(breaks = seq(0, max(data_b$iteration), 10)) +
     coord_cartesian(ylim=c(0, upperBound)) +
     geom_vline(
       xintercept = seq(0, max(data_b$iteration), 100),
-      linetype = "longdash", colour = "#cccccc") +
+      linetype = "longdash", colour = "#dddddd") +
+
+    geom_line(aes(group = invocation), color = "#0000ff", alpha = 0.05) +
+    ylab(levels(data_b$unit)) +
+    xlab("iterations") +
     theme_simple(8) +
-    theme(legend.position=c(0.92, .92))
-  print(plot)
+    theme_no_legend() +
+      theme(axis.title.x = element_text(margin = margin(t = -6))) +
+    scale_force_origin_continuous()
+  if (is.numeric(highlight_invocation)) {
+    plot <- plot + geom_line(
+      data = data_b %>% filter(invocation == 4),
+      size=0.1,
+      color = "#cc0000", alpha = 1)
+  }
+  
+  plot <- plot +
+    # after this iteration, we consider data hot
+    geom_vline(
+      xintercept = 2000,
+      linetype = "longdash", colour = "#cc0000")
+  
+  plot
 }
-
-# levels(data1$bench)
-
-# benchmarks <- c("TrapezoidalApproximation", "DeltaBlue", "Json", "Loop")
 
 steady_suites <- c("macro-steady", "micro-steady", "savina-jit")
 
 data_f <- data1 %>%
-  # dplyr::filter(bench %in% benchmarks) %>%
   dplyr::filter(suite %in% steady_suites) %>%
-  dplyr::select(-c(cores, extraargs, criterion, unit, warmup, varvalue, cmdline, inputsize,
+  dplyr::select(-c(cores, extraargs, criterion, warmup, varvalue, cmdline, inputsize,
                    trialid, runid, expid)) %>%
   droplevels()
 data_f$invocation <- factor(data_f$invocation)
+```
 
-# summary(data_f)
-# levels(data_f$exe)
-# levels(data1$suite)
+The first plot below shows the [IntegerLoop](https://github.com/smarr/SOMns/blob/release/core-lib/Benchmarks/LanguageFeatures.ns#L192-L197) 
+benchmark, which runs a loop from -20000 to 20000 and assigns a variable with
+by subtracting the current loop index from itself. It's a classic microbenchmark
+and I wouldn't expect too many complications from it.
 
-# e <- "SOMns-graal"
-# s <- "macro-steady"
-# b <- "DeltaBlue"
-# data_b <- data_f %>%
-#   # dplyr::filter(exe == "SOMns-graal" & bench == "DeltaBlue" & suite == "macro-steady") %>%
-#   dplyr::filter(exe == "SOMns-graal" & bench == "TrapezoidalApproximation" & suite == "savina-jit") %>%
-#   #dplyr::filter(invocation <= 10) %>%
+```{r integer-loop-all-data, results='asis', echo=FALSE, cache=TRUE}
+cp("<figure>")
+warmup_plot(
+  data_f %>% filter(bench == "IntegerLoop", suite == "micro-steady", exe == "SOMns-graal"),
+  highlight_invocation = NA)
+cp("<figcaption>IntegerLoop benchmark on SOMns</figcaption>")
+cp("</figure>")
+```
+
+Though, the plot shows a few interesting bits. First note that there is a clear
+dark blue line coming down and then settling at about 25ms.
+At iteration 1000, we can see a clear spike. At this point, the `benchmark`
+method crossed the compilation threshold and got compiled.
+Before, only the inner block/lambda was compiled, I think.
+Unfortunately, by compiling the `benchmark` method itself, performance seems to
+decrease a bit to about 30ms, an almost. Since compilers rely on heuristics,
+these things can happen.
+Though, it would be good to look into why it happens here.
+
+But back to the plot itself. We also see light blue spikes,
+in different shades of blue, and different sizes. These spikes likely
+correspond to garbage collection or compilation events.
+Though, overall, the result is pretty stable. Except for the undesirable slowdown,
+we would hope that benchmarks look like this. All thirty invocations would
+report the same result.
+
+The next plot below shows the
+[Vacation](https://github.com/smarr/SOMns/blob/release/core-lib/Benchmarks/Vacation.ns) benchmark,
+which is a simulation for a travel agency that has been used for instance to
+benchmark software transactional memory systems.
+The version used here, relies on threads and locks, even though, we run it only
+with a single thread.
+
+```{r vacation-data, results='asis', echo=FALSE, cache=TRUE}
+cp("<figure>")
+warmup_plot(
+  data_f %>% filter(bench == "Vacation", suite == "macro-steady", exe == "SOMns-graal"))
+cp("<figcaption>Vacation benchmark on SOMns</figcaption>")
+cp("</figure>")
+```
+The plot is clearly less nice than the one for IntegerLoop.
+Only after about a 100 iterations, we reach a point where the measurements fit onto the plot.
+This shows that the compiler can optimize the benchmark very well, but it takes time to do so.
+Eventually, the benchmark reaches a run time of under 2ms, which isn't ideal,
+since we might simply be measuring noise at this level of performance.
+
+We also see that there is a much larger area that is different shades of blue.
+Though, there seems to be a somewhat blue core, which indicates that there is a
+somewhat normal-ish distribution of iteration times across our 30 invocations
+of the benchmark.
+
+Just to emphasize what is visualized, I picked out one invocation,
+and instead of plotting it in a transparent blue, it's plotted in red.
+Here we can clearly see the many ups and downs within a single
+invocation, but the overall trend seems to stabilize.
+
+
+```{r all-data, results='asis', class.output="all-data-plots", fig.height=2.5, fig.width=3.5, cache=TRUE}
+for (e in levels(data_f$exe)) {
+  data_e <- data_f %>%
+    dplyr::filter(exe == e) %>%
+    droplevels()
+  
+  # for (s in levels(data_e$suite)) {
+  for (s in steady_suites) {
+    data_s <- data_e %>%
+      dplyr::filter(suite == s) %>%
+      droplevels()
+    
+    for (b in levels(data_s$bench)) {
+      data_b <- data_s %>%
+        dplyr::filter(bench == b) %>%
+        droplevels()
+      
+      cp('<div><span class="warmup-benchmark">', b, '</span><span class="warmup-suite">', s, '</span><span class="warmup-exe">', e, '</span>')
+      cp('<div class="warmup-plot">')
+      print(warmup_plot(data_b, highlight_invocation = 3))
+      cp('</div></div>')
+    }
+  }
+}
+```
+
+### How Close Can We Get to the "True" Average Performance?
+
+After inspecting our plots, and considering the compilation threshold of 1000
+iterations, it seems plausible to define the "true" average for our benchmarks
+based on the measurements after the 2000th iteration. 
+In the previous plots, you may have noticed the red dashed line at the 2000th
+iteration. This definition gives us 1000 iterations to calculate the average
+from. As a somewhat stable average, I'll use the median for now.
+Let's assume for simplicity that this is fine.
+
+
+```{r calc-hot-stats, echo=FALSE, cache=TRUE}
+hot <- data_f %>%
+  dplyr::filter(iteration > 2000) %>%
+  droplevels()
+
+stats_hot <- hot %>%
+  dplyr::group_by(exe, suite, bench) %>%
+  dplyr::summarise(
+    total_hot_median = median(value),
+    
+    total_hot_mean   = mean  (value),
+    total_hot_min    = min   (value),
+    total_hot_q5     = quantile(value, probs = 0.05),
+    total_hot_q10    = quantile(value, probs = 0.10),
+    total_hot_q15    = quantile(value, probs = 0.15),
+    total_hot_q20    = quantile(value, probs = 0.20),
+    total_hot_q25    = quantile(value, probs = 0.25),
+    .groups = "drop"
+  )
+```
+
+Since the time benchmarking takes needs to be practical,
+I need to to minimize this warmup threshold as well as the number of iterations
+used to calculate the median, while keeping it within an acceptable range of
+the "true" median I calculated from the last 1000 iterations.
+
+To get a feeling of whether this is workable, I'll visualize how far off
+the median is when I take various different warmup thresholds and
+number of iterations to calculate the average.
+
+```{r calc-warmup-stats, echo = FALSE, cache=TRUE}
+warmup <- seq(1, 2000, by = 25)
+iter   <- seq(1, 1000, by = 25)
+params <- crossing(warmup, iter)
+param_list <- split(params, seq(nrow(params)))
+
+plan(multisession, workers = availableCores())
+
+# Sequential version:  stats_for_params <- purrr::map(param_list, function (p) {
+stats_for_params <- future_map(param_list, function (p, stats_hot, data_f) {
+  stats <- data_f %>%
+    dplyr::filter(iteration >= p$warmup & iteration <= (p$warmup + p$iter)) %>%
+    droplevels() %>%
+    dplyr::group_by(exe, suite, bench) %>%
+    dplyr::summarise(median_ = median(value), .groups = "drop") %>%
+    left_join(stats_hot, by = c("exe", "suite", "bench")) %>%
+    dplyr::mutate(diff_to_hot_median = abs(total_hot_median - median_),
+                  diff_to_hot_median_ratio = abs(total_hot_median - median_) / total_hot_median)
+    
+  list(max_iter = p$warmup + p$iter,
+       warmup   = p$warmup,
+       stats    = stats)
+}, stats_hot = stats_hot, data_f = data_f)
+
+# end the parallel workers. mostly useful for interactive sessions
+future:::ClusterRegistry("stop")
+```
+    
+```{r fn-plot-warmup-params, echo = FALSE, cache=FALSE}
+color_palette <- colorRampPalette(colors = c("blue", "yellow", "red"))(length(warmup))
+
+extract_stats_for_b <- function (d, b, s, e) {
+  max_iter <- d$max_iter
+  iter     <- d$max_iter - d$warmup
+  warmup   <- d$warmup
+  
+  data_for_b <- d$stats %>%
+    filter(bench == b, suite == s, exe == e) %>%
+    droplevels()
+  data.frame(max_iter, iter, warmup, data_for_b)
+}
+
+plot_median_diff_from_hot <- function(b, s, e, legend_height = 20) {
+  cp("started plot_median_diff_from_hot")
+  for_viz <- purrr::map_dfr(stats_for_params, extract_stats_for_b, b, s, e)
+  cp("after map_dfr")
+
+  for_viz_filtered <- for_viz %>%
+    filter(diff_to_hot_median_ratio <= 0.05) %>%
+    mutate(diff = diff_to_hot_median_ratio * 100,
+           marked = ifelse(abs((warmup - 1) - (2 * (iter - 1))) <= 25, "marked", "unmarked"))
+  cp("after filtered")
+  summary(for_viz_filtered)
+
+  plot <- ggplot(for_viz_filtered, aes(x=iter, y=warmup)) +
+      geom_tile(aes(fill = diff)) +
+      scale_fill_gradientn(colors = color_palette, limits = c(0, 5), name = "% diff") + #n.breaks = 10,
+      guides(fill = guide_colourbar(barheight = legend_height, nbins=10)) +
+      xlab("num. iterations") +
+      geom_point(aes(shape = marked),
+                 data = for_viz_filtered %>% filter(marked == "marked")) +
+      scale_shape_manual(values = c("marked"=3, "unmarked"=FALSE)) +
+      theme_simple(8) +
+        theme(legend.title = element_text(size = 8))
+  cp("after ggplot combine")
+  print(plot)
+}
+```
+
+<!--
+#### How to Read these Plots?
+
+- blue indicates the closest match with the determine true median
+  (based on the `hot` stats)
+- red is indicating a larger difference
+- note that the scale adapts to the benchmark
+- all data above 5% from true median is filtered out for better visualization
+-->
+
+The plot below depicts the difference to the "true" median in percent.
+A clear blue means that the median calculated from after discarding the
+warmup iteration on the y-axis and using only the first n iterations (x-axis)
+is identical to the "true" median. A clear bright red means the median differs
+by 5%. If no color is given, the median differs more than 5%.
+
+```{r int-loop-median-diff-from-hot, results='asis', echo=FALSE, fig.height=5, fig.width=7, cache=FALSE}
+cp("<figure>")
+plot_median_diff_from_hot("IntegerLoop", "micro-steady", "SOMns-graal")
+cp("<figcaption>Difference from \"true\" median in % for IntegerLoop</figcaption>")
+cp("</figure>")
+```
+
+This means, for our IntegerLoop benchmark, we can match the figure easily to
+our previous figure. Because of how the compilation decided to optimize,
+we have initially a performance that differs by about 20% from the "true" median
+and thus, is left white.
+Around the 1000th iteration, discarding them as warmup,
+and using only perhaps 100 iterations for the mean, we see some yellow, which
+means the mean is off by 2.5%. Below 1000 iterations of warmup, but with more
+than a 100 or so iterations, we see a darker shade of blue, indicating perhaps
+1% difference from the mean. The rest is clear blue, indicating that which ever
+configuration of warmup and iterations we chose would match the true median.
+
+For the Vacation benchmark, the plot is quite a bit more interesting.
+For the most parts, we are far off the "true" median. Though, then with
+increasing number of warmup and used iterations, we get close to it.
+Establishing a somewhat diagonal where the values become gradually more accurate.
+
+```{r vacation-median-diff-from-hot, results='asis', echo=FALSE, fig.height=5, fig.width=7, cache=FALSE}
+cp("<figure>")
+plot_median_diff_from_hot("Vacation", "macro-steady", "SOMns-graal")
+cp("<figcaption>Difference from \"true\" median in % for Vacation</figcaption>")
+cp("</figure>")
+```
+
+```{r median-diff-from-hot-all-data, results='asis', class.output="all-data-plots", fig.height=2.5, fig.width=3.5, cache=FALSE}
+#options(warn=0)
+#warning=FALSE, error=FALSE, 
+# b <- "CD", s <- "macro-steady", e <- "SOMns-graal"
+
+# data_ttt <- data_f %>%
+#   dplyr::filter(bench == "Havlak", suite == "macro-steady", exe == "SOMns-graal") %>%
 #   droplevels()
 
-# summary(data_b)
+for (e in levels(data_f$exe)) {
+  data_e <- data_f %>%
+    dplyr::filter(exe == e) %>%
+    droplevels()
+  
+  # for (s in levels(data_e$suite)) {
+  for (s in steady_suites) {
+    data_s <- data_e %>%
+      dplyr::filter(suite == s) %>%
+      droplevels()
+    
+    for (b in levels(data_s$bench)) {
+      cp('<div><span class="warmup-benchmark">', b, '</span><span class="warmup-suite">', s, '</span><span class="warmup-exe">', e, '</span>')
+      cp('<div class="warmup-plot">')
+      
+      tryCatch(
+        plot_median_diff_from_hot(b, s, e, legend_height = 10),
+        error = function(ex) {
+          cp('Error for ', b, ' ', s, ' ', e)
+          print(ex)
+          cp(ex)
+        }
+      )
+      
+      cp('</div></div>')
+    }
+  }
+}
 ```
+
+
+
+
+TODO(2020-07-03)
+ - mark the steps we want to use for the next experiments
+
+
+TODO(2020-07-03)
+ - add bootstrapped median
+ - add bootstrapped upper/lower
+   - the dplyr mutate() should allow using multiple return values, I blieve
+
 
 Analyze the data, per benchmark/exe/suite
 - [x] what's the plain average/median per invocation
@@ -92,11 +445,32 @@ Analyze the data, per benchmark/exe/suite
 - if i only use N iterations and M invocations, is the results for N' and M' significantly different at some point for larger values?
 - which is the smallest N and M to get to the same results as for max(N) and max(M)?
 
-```{r calc-stats}
+```{r calc-stats, eval = FALSE, echo = FALSE}
 # based on inspection, 2000 seems a overall good value
-hot <- data_f %>%
-  dplyr::filter(iteration > 2000) %>%
-  droplevels()
+stats_for_params <- future_map(param_list, function (p, stats_hot, data_f) {
+  stats <- data_f %>%
+    dplyr::filter(iteration >= p$warmup & iteration <= (p$warmup + p$iter)) %>%
+    droplevels() %>%
+    dplyr::group_by(exe, suite, bench) %>%
+    dplyr::summarise(
+      median_ = median(value),
+      mean   = mean  (value),
+      min    = min   (value),
+      q5     = quantile(value, probs = 0.05),
+      q10    = quantile(value, probs = 0.10),
+      q15    = quantile(value, probs = 0.15),
+      q20    = quantile(value, probs = 0.20),
+      q25    = quantile(value, probs = 0.25)
+    ) %>%
+    left_join(stats_hot, by = c("exe", "suite", "bench")) %>%
+    dplyr::mutate(diff_to_hot_median = abs(total_hot_median - median_),
+                  diff_to_hot_median_ratio = abs(total_hot_median - median_) / total_hot_median)
+    
+  list(max_iter = p$warmup + p$iter,
+       warmup   = p$warmup,
+       stats    = stats)
+}, stats_hot = stats_hot, data_f = data_f)
+
 
 base <- data_f %>%
   dplyr::group_by(exe, suite, bench) %>%
@@ -151,176 +525,8 @@ inv? maybe at let those at 30 for the start, fixed
 Then, I could possibly sort the invs by their distance from the median or median
 If sorted by median, I can take the highest and lowest until sufficient data is reached
 
-```{r}
-stats_hot <- hot %>%
-  dplyr::group_by(exe, suite, bench) %>%
-  dplyr::summarise(
-    total_hot_median = median(value),
-    
-    total_hot_mean   = mean  (value),
-    total_hot_min    = min   (value),
-    # total_hot_max    = max   (value),
-    total_hot_q5     = quantile(value, probs = 0.05),
-    total_hot_q10    = quantile(value, probs = 0.10),
-    total_hot_q15    = quantile(value, probs = 0.15),
-    total_hot_q20    = quantile(value, probs = 0.20),
-    total_hot_q25    = quantile(value, probs = 0.25),
-    
-    diff_med_mean   = (median(value) - mean  (value)) / median(value),
-    diff_med_min    = (median(value) - min   (value)) / median(value),
-    # diff_med_max    = (median(value) - max   (value)) / median(value),
-    diff_med_q5     = (median(value) - quantile(value, probs = 0.05)) / median(value),
-    diff_med_q10    = (median(value) - quantile(value, probs = 0.10)) / median(value),
-    diff_med_q15    = (median(value) - quantile(value, probs = 0.15)) / median(value),
-    diff_med_q20    = (median(value) - quantile(value, probs = 0.20)) / median(value),
-    diff_med_q25    = (median(value) - quantile(value, probs = 0.25)) / median(value)
-  )
 
 
-warmup <- seq(1, 2000, by = 100)
-iter <- seq(1, 1000, by = 100)
-params <- crossing(warmup, iter)
-param_list <- split(params, seq(nrow(params)))
-
-plan(multisession, workers = availableCores())
-
-#stats_for_params <- purrr::map(param_list, function (p) {
-stats_for_params <- future_map(param_list, function (p, stats_hot) {
-  stats <- data_f %>%
-    dplyr::filter(iteration >= p$warmup & iteration <= (p$warmup + p$iter)) %>%
-    droplevels() %>%
-    dplyr::group_by(exe, suite, bench) %>%
-    dplyr::summarise(
-      median_ = median(value),
-      mean   = mean  (value),
-      min    = min   (value),
-      q5     = quantile(value, probs = 0.05),
-      q10    = quantile(value, probs = 0.10),
-      q15    = quantile(value, probs = 0.15),
-      q20    = quantile(value, probs = 0.20),
-      q25    = quantile(value, probs = 0.25)
-    ) %>%
-    left_join(stats_hot, by = c("exe", "suite", "bench")) %>%
-    dplyr::mutate(diff_to_hot_median = abs(total_hot_median - median_),
-                  diff_to_hot_median_ratio = abs(total_hot_median - median_) / total_hot_median)
-    
-  list(max_iter = p$warmup + p$iter,
-       warmup   = p$warmup,
-       stats    = stats)
-}, stats_hot = stats_hot)
-
-```
-
-### Next Step: Visualize the Result
-
-- I want to be able to see how the warmup/max_iter pair behaves per benchmark
-- how close to they get to the hot stat?
-- how do they behave with changing values
-  - it's per benchmark
-  - it's per stat
-  - it's 3 dimensional
-     - max_iter, warmup, stat or |hot_stat - stat|
-    - first attempt: scatter plot where |hot_stat - stat| is the color
-    
-#### How to Read these Plots?
-
-- blue indicates the closest match with the determine true median
-  (based on the `hot` stats)
-- red is indicating a larger difference
-- note that the scale adapts to the benchmark
-- all data above 5% from true median is filtered out for better visualization
-    
-```{r}
-extract_stats_for_b <- function (d, b, s, e) {
-  #summary(d)
-  max_iter <- d$max_iter
-  iter <- d$max_iter - d$warmup
-  warmup   <- d$warmup
-  data_for_b <- d$stats %>%
-    filter(bench == b & suite == s & exe == e)
-  #summary(data_for_b)
-  data.frame(max_iter, iter, warmup, data_for_b) #, data_for_b
-}
-
-plot_median_diff_from_hot <- function(b, s, e) {
-  # extract data
-  # b <- "VacationSTM"
-  # b <- "Loop"
-  # b <- "DeltaBlue"
-  # b <- "IntegerLoop"
-  # s <- "micro-steady"
-  # s <- "macro-steady"
-  # e <- "SOMns-graal"
-  
-  # d <- stats_for_params[[1]]
-  for_viz <- purrr::map_dfr(stats_for_params, extract_stats_for_b, b, s, e)
-  
-  
-  ## discard everything that's too far out of range
-  medians <- for_viz %>%
-    dplyr::summarise(median_ = median(median_))
-  
-  for_viz_filtered <- for_viz %>%
-    filter(diff_to_hot_median_ratio < 0.05)
-    ##filter((abs(medians$median_ - median_) / medians$median_) < 0.05)
-  
-  
-  
-  plot <- ggplot(for_viz_filtered, aes(x=iter, y=warmup)) +
-      #geom_line(aes(colour = invocation), alpha = 0.05) +  # colour = commitid, invocation
-      #scale_color_manual(values = rep("#0000ff", times = 100)) +  #color
-      # ggtitle(paste(b, s, e)) +
-      #ylab(levels(data_b$unit)) +
-      # scale_x_continuous(breaks = seq(0, max(data_b$iteration), 10)) +
-      #coord_cartesian(ylim=c(0, upperBound)) +
-      #geom_vline(
-      #  xintercept = seq(0, max(data_b$iteration), 100),
-      #  linetype = "longdash", colour = "#cccccc") +
-      #geom_point(aes(colour = diff_to_hot_median_ratio)) +
-      geom_tile(aes(fill = diff_to_hot_median_ratio)) +
-      #scale_fill_continuous(guide = "colourbar") +
-      #scale_color_gradientn(colors = colorRampPalette(colors = c("blue", "red"))(nrow(for_viz_filtered)), values  = scales::rescale(sort(for_viz_filtered$median))) +
-      #scale_color_gradientn(colors = colorRampPalette(colors = c("blue", "red"))(nrow(for_viz_filtered)), values  = scales::rescale(sort(for_viz_filtered$diff_to_hot_median_ratio))) +
-      #scale_color_gradientn(colors = colorRampPalette(colors = c("blue", "yellow", "red"))(nrow(for_viz_filtered)), values  = scales::rescale(sort(for_viz_filtered$diff_to_hot_median_ratio))) +
-      scale_fill_gradientn(colors = colorRampPalette(colors = c("blue", "yellow", "red"))(nrow(for_viz_filtered)), values = scales::rescale(sort(for_viz_filtered$diff_to_hot_median_ratio)),
-                           n.breaks = 15) +
-      #scale_fill_gradientn(colours = terrain.colors(10)) +
-      #scale_fill_gradient(low = "yellow", high = "red", na.value = NA) +
-      guides(fill = guide_colourbar(barheight = 20, nbins=10)) +
-      theme_simple(8)
-  #+
-      #theme(legend.position=c(0.92, .92))
-  print(plot)
-}
-```
-
-```{r median-diff-from-hot, results='asis', warning=FALSE, error=FALSE}
-options(warn=0)
-for (e in levels(data_f$exe)) {
-  data_e <- data_f %>%
-    dplyr::filter(exe == e) %>%
-    droplevels()
-  
-  # for (s in levels(data_e$suite)) {
-  for (s in steady_suites) {
-    data_s <- data_e %>%
-      dplyr::filter(suite == s) %>%
-      droplevels()
-    
-    for (b in levels(data_s$bench)) {
-      data_b <- data_s %>%
-        dplyr::filter(bench == b) %>%
-        droplevels()
-      
-      cp('<div><span class="warmup-benchmark">', b, '</span><span class="warmup-suite">', s, '</span><span class="warmup-exe">', e, '</span>')
-      cp('<div class="warmup-plot">')
-      
-      plot_median_diff_from_hot(b, s, e)
-      cp('</div></div>')
-    }
-  }
-}
-```
 
 ## Identify Stable Metric
 
@@ -341,7 +547,7 @@ This should correspond to a diagonal through the previous plots.
 
 One could also play with the angles to afterwards look at other alternatives.
 
-```{r max-iter-fn}
+```{r max-iter-fn,          eval = FALSE, echo = FALSE}
 # x <- iter
 # y <- warmup = 2*iter
 # max_iter <- x + y
@@ -392,7 +598,7 @@ plot_stats_diff_from_hot <- function(b, s, e) {
 }
 ```
 
-```{r stats-diff-from-hot, results='asis', warning=FALSE, error=FALSE}
+```{r stats-diff-from-hot, results='asis', warning=FALSE, error=FALSE,         eval = FALSE, echo = FALSE}
 options(warn=0)
 for (e in levels(data_f$exe)) {
   data_e <- data_f %>%
@@ -425,7 +631,7 @@ for (e in levels(data_f$exe)) {
 - what's the diff between slowest and fastest inv stats on hot?
 - 
 
-```{r prep-inv-data}
+```{r prep-inv-data,             eval = FALSE, echo = FALSE}
 stats_hot_i <- hot %>%
   dplyr::group_by(exe, suite, bench, invocation) %>%
   dplyr::summarise(
@@ -471,7 +677,7 @@ stats_hot_i_stats <- stats_hot_i %>%
 
 # Raw Data
 
-```{r}
+```{r,           eval = FALSE, echo = FALSE}
 
 stats <- stats %>%
   left_join(stats_hot, by = c("exe", "suite", "bench"))
@@ -505,28 +711,27 @@ stats_i_stats <- stats_i %>%
   )
 ```
 
-```{r all-data, results='asis'}
-for (e in levels(data_f$exe)) {
-  data_e <- data_f %>%
-    dplyr::filter(exe == e) %>%
-    droplevels()
-  
-  # for (s in levels(data_e$suite)) {
-  for (s in steady_suites) {
-    data_s <- data_e %>%
-      dplyr::filter(suite == s) %>%
-      droplevels()
+
+## Further Reading
+
+- Prague (Petr Tuma) (presentation at JKU)
+- benchmarking in the cloud paper 
+    Duet Benchmarking: Improving Measurement Accuracy in the Cloud
+    L. Bulej, V. Horký, P. Tůma, F. Farquet, A. Prokopec
+    Proceedings of the ACM/SPEC International Conference on Performance Engineering
+    https://arxiv.org/abs/2001.05811
     
-    for (b in levels(data_s$bench)) {
-      data_b <- data_s %>%
-        dplyr::filter(bench == b) %>%
-        droplevels()
-      
-      cp('<div><span class="warmup-benchmark">', b, '</span><span class="warmup-suite">', s, '</span><span class="warmup-exe">', e, '</span>')
-      cp('<div class="warmup-plot">')
-      warmup_plot(data_b, b, s, e)
-      cp('</div></div>')
-    }
-  }
-}
-```
+    
+Do We Teach Useful Statistics for Performance Evaluation?
+L. Bulej, V. Horký, P. Tůma
+Companion Proc. 8th ACM/SPEC on Intl. Conf. on Performance Engineering
+http://doi.acm.org/10.1145/3053600.3053638
+    
+- warmup paper
+
+
+
+[SOM]: https://som-st.github.io
+[SOMns]: https://github.com/smarr/SOMns#readme
+[ReBench]: https://github.com/smarr/ReBench#readme
+[ReBenchDB]: https://github.com/smarr/ReBenchDB#readme
