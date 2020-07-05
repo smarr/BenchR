@@ -22,6 +22,9 @@ load_and_install_if_necessary("boot")
 load_and_install_if_necessary("ggstance")
 load_and_install_if_necessary("tidyr")
 
+load_and_install_if_necessary("ragg")
+load_and_install_if_necessary("svglite")
+
 # load_and_install_if_necessary("RPostgres")
 # load_and_install_if_necessary("DBI")
 
