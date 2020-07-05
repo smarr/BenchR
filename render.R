@@ -7,7 +7,7 @@ args <- commandArgs(trailingOnly = TRUE)
 
 # Now, they suggest this:
 render(args[1],
-       "html_document",
+       "all",
        args[2],
        output_dir = args[3],
        runtime = "static", clean = TRUE)
