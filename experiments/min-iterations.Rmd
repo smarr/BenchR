@@ -244,20 +244,31 @@ hot <- data_f %>%
   dplyr::filter(iteration > 2000) %>%
   droplevels()
 
+calc_all_stats <- function(value) {
+  median <- median(value)
+  mean   <- mean(value)
+  min    <- min(value)
+  q      <- quantile(value, probs = c(0.05, 0.10, 0.15, 0.20, 0.25))
+
+  data.frame(median = median,
+             mean = mean,
+             min = min,
+             q5 = q[[1]], q10 = q[[2]], q15 = q[[3]], q20 = q[[4]], q25 = q[[5]]
+             )
+}
+
+name_total_hot <- function(df) {
+  colnames(df) <- paste0("total_hot_", colnames(df))
+  df
+}
+
 stats_hot <- hot %>%
   dplyr::group_by(exe, suite, bench) %>%
   dplyr::summarise(
-    total_hot_median = median(value),
-    
-    total_hot_mean   = mean  (value),
-    total_hot_min    = min   (value),
-    total_hot_q5     = quantile(value, probs = 0.05),
-    total_hot_q10    = quantile(value, probs = 0.10),
-    total_hot_q15    = quantile(value, probs = 0.15),
-    total_hot_q20    = quantile(value, probs = 0.20),
-    total_hot_q25    = quantile(value, probs = 0.25),
+    name_total_hot(calc_all_stats(value)),
     .groups = "drop"
   )
+
 ```
 
 Since the time benchmarking takes needs to be practical,
@@ -311,13 +322,20 @@ extract_stats_for_b <- function (d, b, s, e) {
   data.frame(max_iter, iter, warmup, data_for_b)
 }
 
+filter_diagonal <- function(warmup, iter) {
+  # the -1 are because the values start counting at 1 which makes this a little awkward...
+  # using the abs <= 25 gives use a wide step function with more data,
+  # but without any duplicates for max_iter, so, it should work for plotting
+  abs((warmup - 1) - (2 * (iter - 1))) <= 25
+}
+
 plot_median_diff_from_hot <- function(b, s, e, legend_height = 20) {
   for_viz <- purrr::map_dfr(stats_for_params, extract_stats_for_b, b, s, e)
 
   for_viz_filtered <- for_viz %>%
     filter(diff_to_hot_median_ratio <= 0.05) %>%
     mutate(diff = diff_to_hot_median_ratio * 100,
-           marked = abs((warmup - 1) - (2 * (iter - 1))) <= 25)
+           marked = filter_diagonal(warmup, iter))
 
   plot <- ggplot(for_viz_filtered, aes(x=iter, y=warmup)) +
       geom_tile(aes(fill = diff)) +
@@ -457,25 +475,10 @@ Analyze the data, per benchmark/exe/suite
 # plan(multisession, workers = availableCores() / 2)
 
 diagonal <- params %>%
-  filter(abs((warmup - 1) - (2 * (iter - 1))) <= 25) %>%
+  filter(filter_diagonal(warmup, iter)) %>%
   mutate(max_iter = warmup + iter)
-  # %>%
-  # filter(max_iter > 1750, max_iter <= 2000)
 
 diagonal_list <- split(diagonal, seq(nrow(diagonal)))
-
-calc_all_stats <- function(value) {
-  median_ <- median(value)
-  mean    <- mean(value)
-  min     <- min(value)
-  q       <- quantile(value, probs = c(0.05, 0.10, 0.15, 0.20, 0.25))
-
-  data.frame(median = median_,
-             mean = mean,
-             min = min,
-             q5 = q[[1]], q10 = q[[2]], q15 = q[[3]], q20 = q[[4]], q25 = q[[5]]
-             )
-}
 
 # based on inspection, 2000 seems a overall good value
 stats_for_diagonal <- future_map(diagonal_list, function (p, stats_hot, data_f) {
@@ -515,33 +518,7 @@ base <- data_f %>%
 #   dplyr::group_by(exe, suite, bench) %>%
 #   dplyr::mutate(norm_val = value / base_median)
 
-stats_i <- data_f %>%
-  dplyr::group_by(exe, suite, bench, invocation) %>%
-  dplyr::summarise(
-    mean   = mean  (value),
-    median = median(value),
-    min    = min   (value),
-    # max    = max   (value),
-    q5     = quantile(value, probs = 0.05),
-    q10    = quantile(value, probs = 0.10),
-    q15    = quantile(value, probs = 0.15),
-    q20    = quantile(value, probs = 0.20),
-    q25    = quantile(value, probs = 0.25)
-  )
 
-stats <- data_f %>%
-  dplyr::group_by(exe, suite, bench) %>%
-  dplyr::summarise(
-    total_mean   = mean  (value),
-    total_median = median(value),
-    total_min    = min   (value),
-    # total_max    = max   (value),
-    total_q5     = quantile(value, probs = 0.05),
-    total_q10    = quantile(value, probs = 0.10),
-    total_q15    = quantile(value, probs = 0.15),
-    total_q20    = quantile(value, probs = 0.20),
-    total_q25    = quantile(value, probs = 0.25)
-  )
 ```
 
 These Hot stats are the ground truth
