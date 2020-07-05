@@ -2,7 +2,12 @@
 #!Rscript ../render.R min-iterations.Rmd min-iter.html out
 title: "Is This Noise, or Does This Mean Something? #benchmarking"
 #title: "Analyze Benchmark Results to Determine Minimum Viable Number of Benchmark Iterations"
-output: html_notebook
+#output: html_notebook
+output:
+  md_document:
+    # variant: markdown
+    variant: markdown_github
+    preserve_yaml: true
 ---
 
 # Is This Noise, or Does This Mean Something? #benchmarking
@@ -85,6 +90,8 @@ if (!suppressPackageStartupMessages(library(here, logical.return=TRUE))) {
   library(here)
 }
 source(here("libs", "common.R"), chdir = TRUE)
+
+knitr::opts_chunk$set(dev = "ragg_png")
 
 # data1 <- load_data("https://rebench.stefan-marr.de/rebenchdb/get-exp-data/137")
 data1 <- load_data("https://rebench.stefan-marr.de/rebenchdb/get-exp-data/37")
