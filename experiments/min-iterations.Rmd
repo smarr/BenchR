@@ -202,7 +202,7 @@ Here we can clearly see the many ups and downs within a single
 invocation, but the overall trend seems to stabilize.
 
 
-```{r all-data, results='asis', class.output="all-data-plots", fig.height=2.5, fig.width=3.5, cache=TRUE}
+```{r all-data, results='asis', class.output="all-data-plots", fig.height=2.5, fig.width=3.5, echo=FALSE, cache=TRUE}
 for (e in levels(data_f$exe)) {
   data_e <- data_f %>%
     dplyr::filter(exe == e) %>%
@@ -297,7 +297,7 @@ stats_for_params <- future_map(param_list, function (p, stats_hot, data_f) {
 # future:::ClusterRegistry("stop")
 ```
     
-```{r fn-plot-warmup-params, echo=FALSE, cache=FALSE}
+```{r fn-plot-warmup-params, echo=FALSE, cache=TRUE}
 color_palette <- colorRampPalette(colors = c("blue", "yellow", "red"))(length(warmup))
 
 extract_stats_for_b <- function (d, b, s, e) {
@@ -349,7 +349,7 @@ warmup iteration on the y-axis and using only the first n iterations (x-axis)
 is identical to the "true" median. A clear bright red means the median differs
 by 5%. If no color is given, the median differs more than 5%.
 
-```{r int-loop-median-diff-from-hot, results='asis', echo=FALSE, fig.height=5, fig.width=7, cache=FALSE}
+```{r int-loop-median-diff-from-hot, results='asis', echo=FALSE, fig.height=5, fig.width=7, cache=TRUE}
 cp("<figure>")
 plot_median_diff_from_hot("IntegerLoop", "micro-steady", "SOMns-graal")
 cp("<figcaption>Difference from \"true\" median in % for IntegerLoop</figcaption>")
@@ -372,7 +372,7 @@ For the most parts, we are far off the "true" median. Though, then with
 increasing number of warmup and used iterations, we get close to it.
 Establishing a somewhat diagonal where the values become gradually more accurate.
 
-```{r vacation-median-diff-from-hot, results='asis', echo=FALSE, fig.height=5, fig.width=7, cache=FALSE}
+```{r vacation-median-diff-from-hot, results='asis', echo=FALSE, fig.height=5, fig.width=7, cache=TRUE}
 cp("<figure>")
 plot_median_diff_from_hot("Vacation", "macro-steady", "SOMns-graal")
 cp("<figcaption>Difference from \"true\" median in % for Vacation</figcaption>")
@@ -386,14 +386,10 @@ and we only get closer to the "true" median, after we crossed it.
 For other benchmarks, there are a lot of parts that do not come close to the
 "true" median, like for the Vacation benchmark.
 
-```{r median-diff-from-hot-all-data, results='asis', class.output="all-data-plots", fig.height=2.5, fig.width=3.5, cache=FALSE}
+```{r median-diff-from-hot-all-data, results='asis', class.output="all-data-plots", fig.height=2.5, fig.width=3.5, cache=TRUE}
 #options(warn=0)
 #warning=FALSE, error=FALSE, 
 # b <- "CD", s <- "macro-steady", e <- "SOMns-graal"
-
-# data_ttt <- data_f %>%
-#   dplyr::filter(bench == "Havlak", suite == "macro-steady", exe == "SOMns-graal") %>%
-#   droplevels()
 
 for (e in levels(data_f$exe)) {
   data_e <- data_f %>%
@@ -457,7 +453,7 @@ Analyze the data, per benchmark/exe/suite
 - if i only use N iterations and M invocations, is the results for N' and M' significantly different at some point for larger values?
 - which is the smallest N and M to get to the same results as for max(N) and max(M)?
 
-```{r calc-stats, eval = FALSE, echo = FALSE}
+```{r calc-stats, echo = FALSE, cache=TRUE}
 # plan(multisession, workers = availableCores() / 2)
 
 diagonal <- params %>%
