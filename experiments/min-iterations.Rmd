@@ -131,7 +131,9 @@ warmup_plot <- function (data_b, upper_bound = 3, highlight_invocation = 4) {
 steady_suites <- c("macro-steady", "micro-steady", "savina-jit")
 
 data_f <- data1 %>%
-  dplyr::filter(suite %in% steady_suites) %>%
+  ## exclude interpreter results, and also SOMns-native. It's just more stuff
+  ##  but not really contributing to the goal
+  dplyr::filter(suite %in% steady_suites, exe != "SOMns-native") %>%
   dplyr::select(-c(cores, extraargs, criterion, warmup, varvalue, cmdline, inputsize,
                    trialid, runid, expid)) %>%
   droplevels()
