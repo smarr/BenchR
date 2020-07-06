@@ -1,13 +1,17 @@
 #!/usr/bin/env Rscript
-library(rmarkdown)
-# library(knitr)
 args <- commandArgs(trailingOnly = TRUE)
-# This is what we used to use
-# result_file <- knit2html(args[1], args[2])
+input_file  <- args[1]
+output_file <- args[2]
+output_dir  <- args[3]
 
-# Now, they suggest this:
-render(args[1],
-       "all",
-       args[2],
-       output_dir = args[3],
-       runtime = "static", clean = TRUE)
+if (endsWith(output_file, ".md")) {
+  library(knitr)
+  knit(input_file, paste0(output_dir, '/', output_file))
+} else {
+  library(rmarkdown)
+  render(input_file,
+         "all",
+         output_file,
+         output_dir = output_dir,
+         runtime = "static", clean = TRUE)
+}
