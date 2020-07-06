@@ -1056,20 +1056,66 @@ TODO(2020-07-04)
 
 ## Further Reading
 
-- Prague (Petr Tuma) (presentation at JKU)
-- benchmarking in the cloud paper 
-    Duet Benchmarking: Improving Measurement Accuracy in the Cloud
-    L. Bulej, V. Horký, P. Tůma, F. Farquet, A. Prokopec
-    Proceedings of the ACM/SPEC International Conference on Performance Engineering
-    https://arxiv.org/abs/2001.05811
-    
-    
-Do We Teach Useful Statistics for Performance Evaluation?
-L. Bulej, V. Horký, P. Tůma
-Companion Proc. 8th ACM/SPEC on Intl. Conf. on Performance Engineering
-http://doi.acm.org/10.1145/3053600.3053638
-    
-- warmup paper
+This analysis doesn't stand in a vacuum of course.
+Proper benchmarking and evaluation are an important topic in literature.
+[Georges at al. (2007)](https://www2.ccs.neu.edu/racket/Performance/andy-georges-paper.pdf)
+have long advocated for using statistically rigorous methods for evaluating
+just-in-time compiled systems. Their proposed methodology includes to take the
+mean per invocation for the iterations after a certain warmup cut off.
+Though, they use also confidence intervals and the coefficient of variance,
+which I haven't done here.
+Interestingly they report a maximum difference of 20% between the
+minimum and maximum for benchmarks at peak performance, which is interesting,
+since the benchmarks used here seem to show higher differences.
+They also provided JavaStat, a tool to automatically determine the necessary
+number of benchmark iterations to reach a desired confidence interval
+width.
+
+[Kalibera and Jones (2013)](https://kar.kent.ac.uk/33611/45/p63-kaliber.pdf)
+expand on the work by investigating how to do rigorous benchmarks in reasonable time.
+They advocate of effect size confidence intervals as well as a visual approach
+to determine that measurements are independent of each other.
+They also look at the variation between invocations, which at least for one
+benchmark was 30%. This lead them to propose a way to determine
+how many iterations and invocations one would need to achieve a desired precision.
+In an [earlier paper](https://www.cs.kent.ac.uk/pubs/2012/3233/content.pdf)
+they went into the underlying technical details.
+
+More recently, [Barrett et al.](https://dl.acm.org/doi/10.1145/3133876)
+looked into one of the underlying assumptions we typically have: we hope our
+systems reach a steady state. Spoiler: they often don't.
+They use [Krun](https://github.com/softdevteam/krun/#readme) to control the
+system on which the benchmarks are executed to minimize interference coming
+from the operating system and hardware.
+The work concludes with useful suggestions about sizing experiments, similar
+to what [Kalibera and Jones](https://kar.kent.ac.uk/33611/45/p63-kaliber.pdf) did.
+They suggest at the very least 10 invocations, but 15.
+
+[Bulej et al. (2020)](https://arxiv.org/abs/2001.05811) investigate how to benchmark
+in noisy environments such as multitenant cloud servers.
+The propose an approach that carefully synchronizes the execution of the pairs
+of systems to be compared. This seems to reduce the size of their bootstrap
+confidence intervals significantly.
+
+## What's Next?
+
+The aforementioned literature lays a foundation for statistically rigorous work.
+I have been adhering to at least some of the suggestions to ensure reliable
+results in my own papers. However, none of these approaches help me with my
+day-to-day engineering needs. Even doing 5 or 10 invocations for each benchmark
+result in overall run times of the benchmarking job that make them too slow for
+good usability.
+
+From the data it is evident that the compilation threshold is clearly observable.
+The first step will be to reduce it and hope that this will lead to better results.
+A very quick and dirty run with the benchmarking settings I have been using
+didn't indicate any significant improvements, but a full run is still in progress.
+
+Another knob to be turned are the benchmark parameters. Benchmarks such as
+Vacation have very short iteration times, which makes them susceptible to noise.
+
+And, then, there are the strange things, for instance with IntegerLoop,
+which need to be investigated, and possibly reveal engineering issues.
 
 
 
