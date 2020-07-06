@@ -16,12 +16,12 @@ output:
 # Is This Noise, or Does This Mean Something? #benchmarking
 ## Do my performance measurements allow me to conclude anything at all?
 
-For the development of various research languages ([SOM], [SOMns], ...) we have
-used continuous performance tracking for the better part of the last decade.
+For the work on various research languages ([SOM], [SOMns], ...), I have
+been using continuous performance tracking for the better part of the last decade.
 
-One should think, we would know what we are doing.
+One would hope that I would know what I are doing.
 
-For the last half year, I have been using [ReBenchDB] to track performance,
+Since about half year, I am using [ReBenchDB] to track performance (before I used [Codespeed](https://github.com/tobami/codespeed)),
 and use the same statistical tools, that I am using for academic research
 papers. While it's a great tool, and built for exactly what I want to do,
 it made me question more strongly than before whether I can even trust these
