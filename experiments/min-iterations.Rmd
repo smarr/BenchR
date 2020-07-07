@@ -1,55 +1,106 @@
 ---
-#!Rscript ../render.R min-iterations.Rmd min-iter.html out
+#!./min-iterations.knit.sh
 title: "Is This Noise, or Does This Mean Something? #benchmarking"
-#title: "Analyze Benchmark Results to Determine Minimum Viable Number of Benchmark Iterations"
-#output: html_notebook
 output:
-  md_document:
-    # variant: markdown
-    variant: gfm+raw_html+backtick_code_blocks+markdown_in_html_blocks
-    preserve_yaml: true
-  html_fragment:
-    theme: null  # disable bootstrap/jquery
-    self_contained: no
+  html_notebook: default
+  # html_fragment:
+  #   theme: null
+  #   self_contained: no
+  # md_document:
+  #   variant: gfm+raw_html+backtick_code_blocks  # not compatible with gfm: +markdown_in_html_blocks
+  #   preserve_yaml: yes
+date: '2020-07-05 21:41:22 +0100'
+layout: post
+categories:
+  - Research
+tags:
+  - Benchmarking
+  - just-in-time compilation
+  - KnitR
+  - Language Implementation
+  - Research
+  - Performance
+  - SOM
+  - SOMns
+custom_scss: |
+  figure { margin-left: 0; margin-right: 0; }
+  img { max-width: 100%; }
+  .all-data-plots .suite-name, .all-data-plots .exe-name {
+    display: none;
+  }
+  .all-data-plots {
+    position: absolute;
+    left: 56em;
+  }
+  .all-data-plots .benchmarks {
+    max-height: 50em;
+    overflow: scroll;
+  }
+  
+  .all-data-plots img {
+    max-width: 15em;
+  }
+  
+  .all-data-plots .benchmark {
+    padding-bottom: 1em;
+  }
+  
+  .post-content table th, .post-content table tr {
+    font-size: 12px;
+  }
+  
+  .post-content td:nth-child(1) {
+    line-break: anywhere;
+    min-width: 8em;
+  }
+
+htmlmeta:
+  description: An analysis of the quality of benchmarking data.
+  keywords: Benchmarking, just-in-time compilation, KnitR, Language Implementation, Research, Performance, SOM, SOMns
+  author: Stefan Marr
 ---
 
-# Is This Noise, or Does This Mean Something? #benchmarking
 ## Do my performance measurements allow me to conclude anything at all?
 
-For the work on various research languages ([SOM], [SOMns], ...), I have
+For the work on various research languages ([SOMns], [SOM], [TruffleSOM] ...), I have
 been using continuous performance tracking for the better part of the last decade.
 
-One would hope that I would know what I are doing.
+One would hope that I would know what I am doing...
 
-Since about half year, I am using [ReBenchDB] to track performance (before I used [Codespeed](https://github.com/tobami/codespeed)),
+Since about half a year, I am using [ReBenchDB] to track performance (before I used [Codespeed](https://github.com/tobami/codespeed)),
 and use the same statistical tools, that I am using for academic research
-papers. While it's a great tool, and built for exactly what I want to do,
+papers. While ReBenchDB is of great help, and built for exactly what I want to do,
 it made me question more strongly than before whether I can even trust these
 benchmark results.
 
-![Screenshort of ReBenchDB showing the results of an experiment](min-iterations-figures/rebenchdb.png){height=300px}
+<figure>
+<img src="min-iterations-figures/rebenchdb.png" height="300">
+<figcaption>Screenshort of ReBenchDB showing the results of an experiment</figcaption>
+</figure>
 
-The screenshot shows a table of the benchmark results of an experiment
+The screenshot shows a table with the results of an experiment
 for which I would like to know whether it changes the performance
 of my language implementation.
 I picked a section [from the full report](https://rebench.stefan-marr.de/compare/SOMns/546c1f8e011e1c4671f375b7dc76c97acfb4e428/ef8d51508b48b00f79bc50a63712b174745d103d) showing microbenchmarks, since I would expect
-them to be the simplest to explain.
+them to be the simplest to explain, and for this particular experiment,
+I wouldn't expect any changes.
 
-On first inspection, the results seem mixed. We got two benchmarks marked as red and three as green,
+On first inspection, the results seem however mixed.
+We got two benchmarks marked as red and three as green,
 which may indicate slowdowns and speedups.
 Though, a closer look at the boxplots indicates that we can't really draw
 any strong conclusions. The boxes pretty much overlap, and my experience tells 
 me that this may as well just be noise. I have seen similar ups and downs
 rather frequently on these benchmarks.
 
-This kind of means, I can't tell with any kind of confidence whether the change
-I tried to benchmark has any kind of positive or negative consequences for
-performance. The only thing I can tell is that nothing went terribly wrong.
+This means, I can't tell with confidence whether the change
+I tried to benchmark has any kind of positive or negative impact on
+performance. Though, I am somewhat sure that nothing went terribly wrong.
 I guess that's at least something.
 
 One option may perhaps be to let the benchmarks run for longer.
 Currently, it takes about 40min for the benchmark setup to run.
-If the reliability of the results could be increase,
+If the reliability of the results could be increased,
 perhaps running the benchmarks for an hour may still be good enough.
 Much longer run times will just mean that benchmarking will be ignored,
 so, there's really an upper limit on how long things can take.
@@ -62,11 +113,11 @@ and get numbers that I can trust more readily?
 ### Gathering More Data to Understand What's Going On
 
 The benchmarking setup I am using relies on [ReBench]. This means,
-in the ideal case, I can simply ask ReBench to execute every benchmarks for 3000
+in the ideal case, I can simply ask ReBench to execute every benchmark for 3000
 iterations and repeat this 30. Since I know that compilation triggers after
 1000 iterations, this should give us fully warmed up execution.
-Having everything executed 30, i.e., using 30 invocations should make sure that
-any variation accross different invocations can also be determined reliably.
+Having everything executed 30 times, i.e., using 30 invocations should make sure that
+any variation across different invocations can also be determined reliably.
 
 This should be all we need to change about the setup:
 
@@ -74,18 +125,19 @@ This should be all we need to change about the setup:
 rebench --invocation=30 --iteration=3000 rebench.conf
 ```
 
-Now it's sit back and wait. In my case, the whole run took about 7.5 days.
+About 7.5 days later, I got the data I wanted.
+
 Not something that's practical for everyday development...
 
 ### Get a Bit of an Overview of All the Data
 
-Once we have the data, I like to get an overall impression of how things look.
+Having the data, let's try to get an impression of the overall situation.
 A line chart that shows the iterations on the x-axis and the run time of
 an iteration in milliseconds on the y-axis should do the job.
 
 Though, we got 30 invocations for every benchmark. To see how these invocations
-differ, I'll plot them all but make the lines transparent, which should allow
-us to see when the behavior changes.
+differ, I'll include all but make the lines transparent. This should allow
+us to see differences in behavior.
 
 ```{r setup, echo=FALSE, include=FALSE}
 if (!suppressPackageStartupMessages(library(here, logical.return=TRUE))) {
@@ -94,7 +146,19 @@ if (!suppressPackageStartupMessages(library(here, logical.return=TRUE))) {
 }
 source(here("libs", "common.R"), chdir = TRUE)
 
-knitr::opts_chunk$set(dev = "ragg_png")
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  dev = "ragg_png",
+  dpi = 192) #  dpi = 192
+
+knitr::knit_hooks$set(
+  plot = function(x, options) {
+    cap  <- options$fig.cap  # figure caption
+    tags <- htmltools::tags
+    as.character(tags$img(src = x, alt = cap))
+  }
+)
 
 # data1 <- load_data("https://rebench.stefan-marr.de/rebenchdb/get-exp-data/137")
 data1 <- load_data("https://rebench.stefan-marr.de/rebenchdb/get-exp-data/37")
@@ -151,26 +215,39 @@ data_f$invocation <- factor(data_f$invocation)
 ```
 
 The first plot below shows the [IntegerLoop](https://github.com/smarr/SOMns/blob/release/core-lib/Benchmarks/LanguageFeatures.ns#L192-L197) 
-benchmark, which runs a loop from -20000 to 20000 and assigns a variable with
-by subtracting the current loop index from itself. It's a classic microbenchmark
+benchmark:
+
+```Smalltalk
+public benchmark = ( | bounds a |
+  bounds:: 20000.
+  bounds negated to: bounds by: 1 do: [:value | a:: value - value].
+  ^ a
+)
+```
+
+The above code is a loop from -20000 to 20000 that sets the variable `a`
+to the result of subtracting the current loop index from itself.
+It's a classic microbenchmark
 and I wouldn't expect too many complications from it.
 
-```{r integer-loop-all-data, results='asis', echo=FALSE, cache=TRUE}
+```{r integer-loop-all-data, results='asis', cache=TRUE, fig.height=5, fig.width=8}
 cp("<figure>")
 warmup_plot(
   data_f %>% filter(bench == "IntegerLoop", suite == "micro-steady", exe == "SOMns-graal"),
   highlight_invocation = NA)
-cp("<figcaption>IntegerLoop benchmark on SOMns</figcaption>")
+cp("<figcaption>Run time of iterations for IntegerLoop benchmark on SOMns</figcaption>")
 cp("</figure>")
 ```
 
-Though, the plot shows a few interesting bits. First note that there is a clear
+Though, the plot shows a few interesting bits. First note that there is a
 dark blue line coming down and then settling at about 25ms.
-At iteration 1000, we can see a clear spike. At this point, the `benchmark`
-method crossed the compilation threshold and got compiled.
-Before, only the inner block/lambda was compiled, I think.
-Unfortunately, by compiling the `benchmark` method itself, performance seems to
-decrease a bit to about 30ms, an almost. Since compilers rely on heuristics,
+At iteration 1000, we can see a clear spike. At this point, the
+benchmark harness itself crossed the compilation threshold and got compiled.
+Before, only our `benchmark` method from above was compiled,
+since it was executed in an additional loop in the harness.
+Unfortunately, by compiling the harness as well, performance seems to
+decrease a bit to about 30ms, i.e. a 20% increase in run time.
+Since compilers rely on heuristics,
 these things can happen.
 Though, it would be good to look into why it happens here.
 
@@ -178,41 +255,27 @@ But back to the plot itself. We also see light blue spikes,
 in different shades of blue, and different sizes. These spikes likely
 correspond to garbage collection or compilation events.
 Though, overall, the result is pretty stable. Except for the undesirable slowdown,
-we would hope that benchmarks look like this. All thirty invocations would
+we would hope that all benchmarks look like this, since all thirty invocations would
 report the same result.
 
 The next plot below shows the
 [Vacation](https://github.com/smarr/SOMns/blob/release/core-lib/Benchmarks/Vacation.ns) benchmark,
-which is a simulation for a travel agency that has been used for instance to
+which is a simulation of a travel booking system that has been used for instance to
 benchmark software transactional memory systems.
 The version used here, relies on threads and locks, even though, we run it only
 with a single thread.
 
-```{r vacation-data, results='asis', echo=FALSE, cache=TRUE}
+```{r vacation-data, results='asis', cache=TRUE, fig.height=5, fig.width=8}
 cp("<figure>")
 warmup_plot(
   data_f %>% filter(bench == "Vacation", suite == "macro-steady", exe == "SOMns-graal"))
-cp("<figcaption>Vacation benchmark on SOMns</figcaption>")
+cp("<figcaption>Run time of iterations for Vacation benchmark on SOMns</figcaption>")
 cp("</figure>")
 ```
-The plot is clearly less nice than the one for IntegerLoop.
-Only after about a 100 iterations, we reach a point where the measurements fit onto the plot.
-This shows that the compiler can optimize the benchmark very well, but it takes time to do so.
-Eventually, the benchmark reaches a run time of under 2ms, which isn't ideal,
-since we might simply be measuring noise at this level of performance.
 
-We also see that there is a much larger area that is different shades of blue.
-Though, there seems to be a somewhat blue core, which indicates that there is a
-somewhat normal-ish distribution of iteration times across our 30 invocations
-of the benchmark.
-
-Just to emphasize what is visualized, I picked out one invocation,
-and instead of plotting it in a transparent blue, it's plotted in red.
-Here we can clearly see the many ups and downs within a single
-invocation, but the overall trend seems to stabilize.
-
-```{r all-data, results='asis', fig.height=2.5, fig.width=3.5, echo=FALSE, cache=TRUE}
+```{r all-data, results='asis', fig.height=2.5, fig.width=3.5, echo=FALSE, cache=TRUE, dpi=120}
 cp("<div class=\"all-data-plots\">")
+cp("<p><strong>All Iteration Plots</strong></p><div class=\"benchmarks\">")
 for (e in levels(data_f$exe)) {
   data_e <- data_f %>%
     dplyr::filter(exe == e) %>%
@@ -229,17 +292,33 @@ for (e in levels(data_f$exe)) {
         dplyr::filter(bench == b) %>%
         droplevels()
       
-      cp('<div><span class="warmup-benchmark">', b, '</span><span class="warmup-suite">', s, '</span><span class="warmup-exe">', e, '</span>')
-      cp('<div class="warmup-plot">')
+      cp('<div class="benchmark"><span class="benchmark-name">', b, '</span><span class="suite-name">', s, '</span><span class="exe-name">', e, '</span>')
+      cp('<div class="plot">')
       print(warmup_plot(data_b, highlight_invocation = 3))
       cp('</div></div>')
     }
   }
 }
-cp("</div>")
+cp("</div></div>")
 ```
 
-</div>
+The plot is clearly less nice than the one for IntegerLoop.
+Only after about a 100 iterations, we reach a point where the measurements fit onto the plot.
+This shows that the compiler can optimize the benchmark very well, but it takes time to do so.
+Eventually, the benchmark reaches a run time of under 2ms, which isn't ideal,
+since we might simply be measuring noise at this level of performance.
+
+We also see that there is a much larger area that is different shades of blue.
+Though, there seems to be a blue core, which indicates that there is a
+somewhat normal-ish distribution of iteration times across our 30 invocations
+of the benchmark.
+
+Just to emphasize what is visualized, I picked out one invocation,
+and instead of plotting it in a transparent blue, it's plotted in red.
+With it we can see the ups and downs within a single
+invocation, but the overall trend seems to stabilize.
+
+The plots for all benchmarks are shown in the box on the right.
 
 ### How Close Can We Get to the "True" Average Performance?
 
@@ -378,7 +457,7 @@ The plot below depicts the difference to the "true" median in percent.
 A clear blue means that the median calculated from after discarding the
 warmup iteration on the y-axis and using only the first n iterations (x-axis)
 is identical to the "true" median. A clear bright red means the median differs
-by 5%. If no color is given, the median differs more than 5%.
+by 5%. If no color is given, the median differs by more than 5%.
 
 ```{r int-loop-median-diff-from-hot, results='asis', echo=FALSE, fig.height=5, fig.width=7, cache=TRUE}
 cp("<figure>")
@@ -398,27 +477,17 @@ than a 100 or so iterations, we see a darker shade of blue, indicating perhaps
 1% difference from the mean. The rest is clear blue, indicating that which ever
 configuration of warmup and iterations we chose would match the true median.
 
-For the Vacation benchmark, the plot is quite a bit more interesting.
-For the most parts, we are far off the "true" median. Though, then with
-increasing number of warmup and used iterations, we get close to it.
-Establishing a somewhat diagonal where the values become gradually more accurate.
-
-```{r vacation-median-diff-from-hot, results='asis', echo=FALSE, fig.height=5, fig.width=7, cache=TRUE}
+```{r vacation-median-diff-from-hot, results='asis', echo=FALSE, fig.height=3, fig.width=7, cache=TRUE}
 cp("<figure>")
 plot_median_diff_from_hot("Vacation", "macro-steady", "SOMns-graal")
 cp("<figcaption>Difference from \"true\" median in % for Vacation</figcaption>")
 cp("</figure>")
 ```
 
-Looking at these plots for all benchmarks below, we see that for quite a number,
-things look pretty good, and they have a lot of blue. Though, there are also
-a number, where we clearly see that the compilation threshold is an issue,
-and we only get closer to the "true" median, after we crossed it.
-For other benchmarks, there are a lot of parts that do not come close to the
-"true" median, like for the Vacation benchmark.
-
 ```{r median-diff-from-hot-all-data, results='asis', echo=FALSE, fig.height=2.5, fig.width=3.5, cache=TRUE}
 cp("<div class=\"all-data-plots\">")
+cp("<p><strong>All Warmup/Iteration Plots</strong></p><div class=\"benchmarks\">")
+
 #options(warn=0)
 #warning=FALSE, error=FALSE, 
 # b <- "CD", s <- "macro-steady", e <- "SOMns-graal"
@@ -435,8 +504,8 @@ for (e in levels(data_f$exe)) {
       droplevels()
     
     for (b in levels(data_s$bench)) {
-      cp('<div><span class="warmup-benchmark">', b, '</span><span class="warmup-suite">', s, '</span><span class="warmup-exe">', e, '</span>')
-      cp('<div class="warmup-plot">')
+      cp('<div class="benchmark"><span class="benchmark-name">', b, '</span><span class="suite-name">', s, '</span><span class="exe-name">', e, '</span>')
+      cp('<div class="plot">')
       
       tryCatch(
         plot_median_diff_from_hot(b, s, e, legend_height = 10),
@@ -451,8 +520,21 @@ for (e in levels(data_f$exe)) {
     }
   }
 }
-cp("</div>")
+cp("</div></div>")
 ```
+
+For the Vacation benchmark, the plot is more interesting.
+For the most parts, we are far off the "true" median. Though, then with
+increasing number of warmup and used iterations, we get close to it.
+This establishes a diagonal where the values become gradually more accurate.
+
+Looking at these plots for all benchmarks in the box on the right,
+we see that for quite a number of them,
+things look pretty good, and they have a lot of blue. Though, there are also
+a number, where we clearly see that the compilation threshold is an issue,
+and we only get closer to the "true" median, after we crossed the threshold.
+For other benchmarks, there are a lot of parts that do not come close to the
+"true" median, like for the Vacation benchmark.
 
 ### Is There A More Stable and Informative Metric?
 
@@ -462,17 +544,19 @@ the precision leaves a bit to be desired.
 To make these plots readable, I also avoided to add other colors to distinguish
 between values below and above the "true" median.
 
-Originally, I wanted to introduce also the use of [bootstrapping](https://en.wikipedia.org/wiki/Bootstrapping_(statistics)) here,
+Originally, I wanted to use [bootstrapping](https://en.wikipedia.org/wiki/Bootstrapping_(statistics))
+and bootstrap confidence intervals here,
 which would avoid making unsupported assumptions about the distribution of
 measurements.
-Unfortunately, it turned out to be impractical with the large data sets at hand.
+Unfortunately, it turned out to be impractical with the large data set at hand.
 Instead, I'll look at a few quantiles, the arithmetic mean, and minimum.
 The minimum has been shown before as a metric that stabilizes fast, though,
 I assume that it does hide possibly important changes in practice.
 
 To investigate these metrics,
 I will look at the pairs of warmup and number of iterations that fall roughly
-on the diagonal of the plots in the last section, indicated by the crosses.
+on the diagonal of the plots in the last section, indicated by the crosses
+you may have noticed.
 
 
 
@@ -549,7 +633,7 @@ plot_stats_diff_from_hot <- function(stats_list, b, s, e) {
 
 ```
 
-As before, the first plot here shows the results for IntegerLoop.
+As before, the first plot shows the results for IntegerLoop.
 The plot focuses on the range of 5% above and 5% below the "true" value assumed
 for each metric.
 
@@ -567,23 +651,12 @@ This happens here because we first need to reach the point where we discard
 enough warmup iterations, before the minimum is what we expect it to be
 based on the last 1000 iterations.
 
-For the Vaction benchmark, the plot again looks very different.
-
-```{r vacation-diff-from-hot, results='asis', echo=FALSE, fig.height=5, fig.width=7, cache=TRUE}
-cp("<figure>")
-plot_stats_diff_from_hot(stats_for_diagonal, "Vacation", "macro-steady", "SOMns-graal")
-cp("<figcaption>Difference from \"true\" value in % for Vacation using data from all 30 invocations</figcaption>")
-cp("</figure>")
-```
-
-As we would expect from previous plots, the metrics converge very late.
-Though, here the minimum and the lower quantiles converge before
-the median and mean.
-
-
 ```{r stats-diff-from-hot, results='asis', fig.height=3.0, fig.width=6.0, echo=FALSE, cache=TRUE}
-# ,         eval = FALSE, echo = FALSE
+#options(warn=0)
+#warning=FALSE, error=FALSE, 
+# b <- "CD", s <- "macro-steady", e <- "SOMns-graal"
 cp("<div class=\"all-data-plots\">")
+cp("<p><strong>All Difference Plots</strong></p><div class=\"benchmarks\">")
 for (e in levels(data_f$exe)) {
   data_e <- data_f %>%
     dplyr::filter(exe == e) %>%
@@ -596,26 +669,38 @@ for (e in levels(data_f$exe)) {
       droplevels()
     
     for (b in levels(data_s$bench)) {
-      cp('<div><span class="warmup-benchmark">', b, '</span><span class="warmup-suite">', s, '</span><span class="warmup-exe">', e, '</span>')
-      cp('<div class="warmup-plot">')
+      cp('<div class="benchmark"><span class="benchmark-name">', b, '</span><span class="suite-name">', s, '</span><span class="exe-name">', e, '</span>')
+      cp('<div class="plot">')
       
       plot_stats_diff_from_hot(stats_for_diagonal, b, s, e)
       cp('</div></div>')
     }
   }
 }
-cp("</div>")
+cp("</div></div>")
 ```
-</div>
 
+```{r vacation-diff-from-hot, results='asis', echo=FALSE, fig.height=5, fig.width=7, cache=TRUE}
+cp("<figure>")
+plot_stats_diff_from_hot(stats_for_diagonal, "Vacation", "macro-steady", "SOMns-graal")
+cp("<figcaption>Difference from \"true\" value in % for Vacation using data from all 30 invocations</figcaption>")
+cp("</figure>")
+```
 
-### What's the Worst Case for these Metrics?
+For the Vacation benchmark, the plot again looks very different.
+As we would expect from previous plots, the metrics converge very late.
+Though, here the minimum and the lower quantiles converge before
+the median and mean.
+
+The other plots are again in a box on the right.
+
+### What's the Largest Differnce from the "True" Value for these Metrics?
 
 The above plots give use an idea of what it looks like
 when we use the data of 30 invocations.
 Though, realistically, this takes too long for day-to-day engineering.
-Below, I am going to look at how the metrics behave when we always pick the
-worst case, i.e., the invocation with the largest difference from
+Below, I am going to look at how the metrics behave when we always pick
+the invocation with the largest difference from
 the "true" value.
 
 ```{r calc-stats-per-in, echo = FALSE, cache=TRUE}
@@ -695,7 +780,7 @@ plot_i_stats_diff_from_hot <- function(stats_list, b, s, e, y_limit = c(0, 5)) {
 
 For the IntegerLoop benchmark, things look fairly familiar.
 Though, the mean does seem to get worse with more data.
-The median sees to be the best of the lot,
+The median seems to be the best metric of the lot,
 but stays well above the indicated 0.1% error margin.
 
 ```{r int-loop-i-diff-from-hot, results='asis', echo=FALSE, fig.height=5, fig.width=7, cache=TRUE}
@@ -705,22 +790,9 @@ cp("<figcaption>Max. difference of any invocation from \"true\" median in % for 
 cp("</figure>")
 ```
 
-For the Vacation benchmark, the situation is quite a bit worse.
-We are getting nowhere near the accuracy that we would need.
-The error does barely reach 25%.
-
-```{r vacation-i-diff-from-hot, results='asis', echo=FALSE, fig.height=5, fig.width=7, cache=TRUE}
-cp("<figure>")
-plot_i_stats_diff_from_hot(stats_for_diagonal_i, "Vacation", "macro-steady", "SOMns-graal", c(0, 100))
-cp("<figcaption>Difference from \"true\" value in % for Vacation using data from all 30 invocations</figcaption>")
-cp("</figure>")
-```
-Looking at the plots for all benchmarks, doesn't make me feel more joyous either.
-It's bad.
-
 ```{r stats-i-diff-from-hot, results='asis', fig.height=3.0, fig.width=6.0, echo=FALSE, cache=TRUE}
-# ,         eval = FALSE, echo = FALSE
 cp("<div class=\"all-data-plots\">")
+cp("<p><strong>All Max. Difference Plots</strong></p><div class=\"benchmarks\">")
 for (e in levels(data_f$exe)) {
   data_e <- data_f %>%
     dplyr::filter(exe == e) %>%
@@ -733,21 +805,35 @@ for (e in levels(data_f$exe)) {
       droplevels()
     
     for (b in levels(data_s$bench)) {
-      cp('<div><span class="warmup-benchmark">', b, '</span><span class="warmup-suite">', s, '</span><span class="warmup-exe">', e, '</span>')
-      cp('<div class="warmup-plot">')
+      cp('<div class="benchmark"><span class="benchmark-name">', b, '</span><span class="suite-name">', s, '</span><span class="exe-name">', e, '</span>')
+      cp('<div class="plot">')
       plot_i_stats_diff_from_hot(stats_for_diagonal_i, b, s, e)
       cp('</div></div>')
     }
   }
 }
-cp("</div>")
+cp("</div></div>")
 ```
 
-</div>
+For the Vacation benchmark, the situation is quite a bit worse.
+We are getting nowhere near the accuracy that we would need.
+The error does barely reach 25%.
+
+```{r vacation-i-diff-from-hot, results='asis', echo=FALSE, fig.height=5, fig.width=7, cache=TRUE}
+cp("<figure>")
+plot_i_stats_diff_from_hot(stats_for_diagonal_i, "Vacation", "macro-steady", "SOMns-graal", c(0, 100))
+cp("<figcaption>Difference from \"true\" value in % for Vacation using data from all 30 invocations</figcaption>")
+cp("</figure>")
+```
+
+
+Looking at the plots for all benchmarks in the box on the right, doesn't make me feel more joyous either.
+It's bad.
+
 
 ### How Many Benchmarks Reach a Certain Accuracy?
 
-With these plots, the next question comping to my mind is how many benchmarks
+With these plots, the next question coming to my mind is how many benchmarks
 actually reach a desired accuracy. So, for how many benchmarks is the difference
 to a "true" average within an allowed range.
 
@@ -820,8 +906,6 @@ plot_accuracy <- function(accuracy) {
 num_experiments <- nrow(stats_after %>% dplyr::group_by(exe, suite, bench) %>% summarise(t = 1, .groups = "drop"))
 ```
 
-
-
 The plot below indicates again: it doesn't look good.
 The 25th percentile seems to be have reasonably well
 and I'll rely on it for the further discussion.
@@ -832,7 +916,10 @@ there are only `r (accuracy %>% filter(max_after_stat == "max_q25_after", accura
 benchmarks that reach the goal using the 25th percentile as metric.
 With a 1% error, we get up to `r (accuracy %>% filter(max_after_stat == "max_q25_after", accuracy == 1))$n` benchmarks, and with 5% even `r (accuracy %>% filter(max_after_stat == "max_q25_after", accuracy == 5))$n`.
 
-Though this means there a a lot of benchmarks, for which the accuracy is not very practical.
+Though this means there are a lot of benchmarks, for which the accuracy
+is not very practical. Even with a 5% fluctuation, I can't really tell whether
+a small optimization in the language implementation has an impact on
+performance.
 
 
 
@@ -884,48 +971,18 @@ max_iter_acc_table <- max_iter_acc %>%
   pivot_wider(names_from = accuracy, names_glue = "{accuracy}%", values_from = min_max_iter)
 
 options(knitr.kable.NA = '')
+colnames(max_iter_acc_table)[1] <- "Benchmark"
 kable(max_iter_acc_table)
 ```
 
 
 
 
-
-## Identify Stable Metric
-
-Others have found the minimum run time to be the most stable metric,
-but it is unclear that this is indeed a useful metric.
-
-Therefore, we will look at a number of different metrics
-including various quantiles.
-
-The exploration of the warmup vs iteration indicates that less warmup can
-be compensated to a degree with more iterations.
-To compare metrics, I want a line plot where the y-axis shows the closeness
-to the true value, and the x axis represents how much measuring has to be done.
-
-As a first attempt, I am going to go for a diagonal through the previous
-plots, that is gradually increase `warmup` and `iter`.
-This should correspond to a diagonal through the previous plots.
-
-One could also play with the angles to afterwards look at other alternatives.
-
-```{r max-iter-fn,          eval = FALSE, echo = FALSE}
-# x <- iter
-# y <- warmup = 2*iter
-# max_iter <- x + y
-
-
-```
-
-
-
-### How many invocations do I need?
-
-- what's the diff between slowest and fastest inv stats on hot?
-- 
-
 ```{r prep-inv-data,             eval = FALSE, echo = FALSE}
+
+## TODO
+## - what's the diff between slowest and fastest inv stats on hot?
+
 base <- data_f %>%
   dplyr::group_by(exe, suite, bench) %>%
   dplyr::summarise(
@@ -1008,13 +1065,6 @@ stats_hot_i_stats <- stats_hot_i %>%
     diff_q25_ratio = (max(q25) - min(q25)) / median(q25)
   )
 
-```
-
-
-# Raw Data
-
-```{r,           eval = FALSE, echo = FALSE}
-
 stats <- stats %>%
   left_join(stats_hot, by = c("exe", "suite", "bench"))
 
@@ -1047,17 +1097,11 @@ stats_i_stats <- stats_i %>%
   )
 ```
 
-
-TODO(2020-07-04)
- - does it make sense to somehow measure the distance of specific metrics
-   from the metrics for specific iterations?
-   I'd think so, not yet sure how to do that
-
-
 ## Further Reading
 
-This analysis doesn't stand in a vacuum of course.
-Proper benchmarking and evaluation are an important topic in literature.
+This analysis isn't done in a vacuum of course.
+Proper benchmarking and evaluation are an important topic in literature,
+especially when it comes to reporting results in academic papers.
 [Georges at al. (2007)](https://www2.ccs.neu.edu/racket/Performance/andy-georges-paper.pdf)
 have long advocated for using statistically rigorous methods for evaluating
 just-in-time compiled systems. Their proposed methodology includes to take the
@@ -1065,15 +1109,15 @@ mean per invocation for the iterations after a certain warmup cut off.
 Though, they use also confidence intervals and the coefficient of variance,
 which I haven't done here.
 Interestingly they report a maximum difference of 20% between the
-minimum and maximum for benchmarks at peak performance, which is interesting,
-since the benchmarks used here seem to show higher differences.
-They also provided JavaStat, a tool to automatically determine the necessary
+minimum and maximum for benchmarks at peak performance.
+The benchmarks I am using on SOMns seem to show higher differences.
+Georges at al. also provided JavaStat, a tool to automatically determine the necessary
 number of benchmark iterations to reach a desired confidence interval
 width.
 
 [Kalibera and Jones (2013)](https://kar.kent.ac.uk/33611/45/p63-kaliber.pdf)
 expand on the work by investigating how to do rigorous benchmarks in reasonable time.
-They advocate of effect size confidence intervals as well as a visual approach
+They advocate for the use of effect size confidence intervals as well as a visual approach
 to determine that measurements are independent of each other.
 They also look at the variation between invocations, which at least for one
 benchmark was 30%. This lead them to propose a way to determine
@@ -1089,11 +1133,11 @@ system on which the benchmarks are executed to minimize interference coming
 from the operating system and hardware.
 The work concludes with useful suggestions about sizing experiments, similar
 to what [Kalibera and Jones](https://kar.kent.ac.uk/33611/45/p63-kaliber.pdf) did.
-They suggest at the very least 10 invocations, but 15.
+They suggest to use at the very least 10 invocations, where 15 should give reliable results.
 
 [Bulej et al. (2020)](https://arxiv.org/abs/2001.05811) investigate how to benchmark
 in noisy environments such as multitenant cloud servers.
-The propose an approach that carefully synchronizes the execution of the pairs
+They propose an approach that carefully synchronizes the execution of the pairs
 of systems to be compared. This seems to reduce the size of their bootstrap
 confidence intervals significantly.
 
@@ -1117,9 +1161,17 @@ Vacation have very short iteration times, which makes them susceptible to noise.
 And, then, there are the strange things, for instance with IntegerLoop,
 which need to be investigated, and possibly reveal engineering issues.
 
+Since SOMns uses Truffle and Graal, using [libgraal](https://medium.com/graalvm/libgraal-graalvm-compiler-as-a-precompiled-graalvm-native-image-26e354bee5c) may further improve things. It would hopefully avoid interference from
+the compiler being compiled at run time. Similarly, perhaps there are a few
+simple things to be stolen from Krun that could reduce the environmental noise.
 
+And there are probably, a hundred other things I could try.
+
+If you got suggestions, tips and tricks, comments, questions, or complains,
+you can find me over on Twitter [@smarr](https://twitter.com/smarr).
 
 [SOM]: https://som-st.github.io
 [SOMns]: https://github.com/smarr/SOMns#readme
 [ReBench]: https://github.com/smarr/ReBench#readme
 [ReBenchDB]: https://github.com/smarr/ReBenchDB#readme
+[TruffleSOM]: https://github.com/SOM-st/TruffleSOM#readme
