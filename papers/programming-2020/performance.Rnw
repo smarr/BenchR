@@ -1,0 +1,1068 @@
+%!TEX root = ../paper.tex
+
+<<knitr-load, echo=FALSE, include=FALSE>>=
+if (Sys.getenv("RSTUDIO") == "1") {
+  if (Sys.getenv("LOGNAME") == "smarr") {
+    setwd("/Users/smarr/Collab/Dominik-Aumayr/snapshot-paper/evaluation") }
+  else {
+    setwd("~/Users/dominikaumayr/Documents/Workspaces/Snapshot_Paper/evaluation") } }
+
+source("../scripts/libraries.R", chdir=TRUE)
+source("../scripts/paper.R", chdir=TRUE)
+@
+
+<<knitr-data, echo=FALSE, include=FALSE, cache=TRUE>>=
+# load libraries, the data, and prepare it
+library(tidyr)
+
+data <- load_data_file_new("09-24-2020_19-55-uniform.data")
+data <- subset(data, Suite == "savina-jit")
+
+dataNP <- load_data_file_new("09-28-2020_04-31-csp.data")
+dataNP$VM <- revalue(dataNP$VM, c("SOMns-graal-np" = "SOMns-graal", "SOMns-graal-at-np" = "SOMns-graal-at", "SOMns-graal-tn-np" = "SOMns-graal", "SOMns-graal-at-tn-np" = "SOMns-graal-at"))
+data <- rbind(data, dataNP)
+dataNP <- NULL
+
+data_tn <- load_data_file_new("09-27-2020_15-18-uniform-tn.data")
+data_tn$VM <- revalue(data_tn$VM, c("SOMns-graal-tn" = "SOMns-graal-mul", "SOMns-graal-at-tn" = "SOMns-graal-at-mul", "SOMns-graal-art-tn" = "SOMns-graal-art-mul"))
+data <- rbind(data, data_tn)
+data_tn <- NULL
+
+dataSSD <- load_data_file_new("09-29-2020_07-38-ssd.data")
+dataSSD$VM <- revalue(dataSSD$VM, c("SOMns-graal-at" = "SOMns-graal-at-ssd"))
+dataSSD <- subset(dataSSD, VM %in% c("SOMns-graal-at-ssd"))
+data <- rbind(data, dataSSD)
+dataSSD <- NULL
+
+dataHDD <- load_data_file_new("09-28-2020_22-50-hdd.data")
+dataHDD$VM <- revalue(dataHDD$VM, c("SOMns-graal-at" = "SOMns-graal-at-hdd"))
+dataHDD <- subset(dataHDD, VM %in% c("SOMns-graal-at-hdd"))
+data <- rbind(data, dataHDD)
+dataHDD <- NULL
+
+dataOld <- load_data_file_new("09-25-2020_03-14-specialized.data")
+dataOld$VM <- revalue(dataOld$VM, c("SOMns-graal" = "SOMns-graal-dev", "SOMns-graal-at" = "SOMns-graal-at-dev"))
+data <- rbind(data, dataOld)
+dataOld <- NULL
+
+data <- subset(data, select = c(Value, Unit, Criterion, Suite, Benchmark, VM, Iteration, Invocation))
+data$VM <- revalue(data$VM, c("SOMns-graal-tn" = "SOMns-graal", "SOMns-graal-at-tn" = "SOMns-graal-at"))
+data$Benchmark <- revalue(data$Benchmark, c("ConcurrentSortedLinkedList" = "ConcurrentList", "ConcurrentDictionary" = "ConcDictionary", "ProducerConsumerBoundedBuffer" = "ProdConsumerBB", "UnbalancedCobwebbedTree" = "CobwebbedTree", "ForkJoinActorCreation" = "FJActorCreation", "ForkJoinThroughput" = "FJThroughput", "TrapezoidalApproximation" = "Trapezoidal", "MutexSuite.Philosophers" = "Philosophers", "STMSuite.Philosophers" = "Philosophers", "LeeSTM" = "Lee", "VacationSTM" = "Vacation", "MultiParadigmBench" = "MultiParadigm"))
+data$VM <- as.factor(data$VM)
+
+memdata <- subset(data, Criterion == "heap" | Criterion == "non-heap" | Criterion == "collected" | Criterion == "gc-time")
+
+trace_data <- subset(data, Unit == "byte" & VM %in% c("SOMns-graal-at", "SOMns-graal-art", "SOMns-graal-at-dev") & Criterion == "trace size", select = c(Value, Unit, Criterion, Benchmark, Suite, VM, Iteration, Invocation))
+
+#max trace size per invocation
+#trace_data <- trace_data %>%
+#  group_by(VM, Benchmark, Suite, Invocation) %>%
+#  summarise(
+#    trace = sum(Value))
+
+trace_names <- c("SOMns-graal-at" = "SOMns_graal_at", "SOMns-graal-at-dev" = "SOMns_graal_at_dev", "SOMns-graal-art" = "SOMns_graal_art")
+trace_data <- subset(trace_data, VM %in% names(trace_names) & Suite == "savina-jit")
+trace_data$VM <- revalue(trace_data$VM, trace_names)
+
+trace_data_sum <- trace_data %>%
+  group_by(VM, Benchmark, Invocation) %>%
+  summarise(
+    trace = round((sum(Value)/(2000*1000000)), digits = 2))
+
+trace_data_sum <- droplevels(trace_data_sum)
+
+trace_old <- trace_data_sum %>%
+  filter(VM == "SOMns_graal_at_dev") %>%
+  group_by(Benchmark) %>%
+  summarise(TraceMean = mean(trace))
+
+normTrace <- trace_data_sum %>%
+  left_join(trace_old) %>%
+  group_by(VM, Benchmark) %>%
+  transform(TraceRatio = trace / TraceMean)
+  
+statsTrace <- normTrace %>%
+  group_by(VM, Benchmark) %>%
+  summarise(
+    Trace = mean(trace),
+    TraceFactor = mean(TraceRatio)
+    )
+
+statsTrace$Benchmark <- revalue(statsTrace$Benchmark, c("ConcurrentSortedLinkedList" = "ConcurrentList", "ConcurrentDictionary" = "ConcDictionary", "ProducerConsumerBoundedBuffer" = "ProdConsumerBB", "UnbalancedCobwebbedTree" = "CobwebbedTree", "ForkJoinActorCreation" = "FJActorCreation", "ForkJoinThroughput" = "FJThroughput", "TrapezoidalApproximation" = "Trapezoidal", "MutexSuite.Philosophers" = "Philosophers", "STMSuite.Philosophers" = "Philosophers", "MultiParadigmBench" = "MultiParadigm"))
+
+trace_stats_plot <- statsTrace
+
+statsTrace <-statsTrace %>% 
+  pivot_wider(names_from = VM, values_from = c(Trace, TraceFactor))
+
+warmupData <- subset(data, Iteration >= 0 & Iteration < 1990)
+warmupData <- subset(warmupData, Unit == "ms" & Criterion == "total")
+
+## Assume that all benchmarks are warmed up after 100 iterations, mostly true, based on visual inspection
+data <- subset(data, Iteration >= 500 & Iteration < 1990) 
+data <- subset(data, Unit == "ms" & Criterion == "total")
+
+
+## Calculate mean for SOMns
+somns <- data %>%
+  filter(VM == "SOMns-graal") %>%
+  group_by(Benchmark, Suite) %>%
+  summarise(RuntimeMean = mean(Value))
+
+norm <- data %>%
+  left_join(somns) %>%
+  group_by(Benchmark, Suite) %>%
+  transform(RuntimeRatio = Value / RuntimeMean)
+  
+stats <- norm %>%
+  group_by(VM, Benchmark, Suite) %>%
+  summarise(
+    Time.ms = mean(Value),
+    sd      = sd(Value),
+    RuntimeFactor = mean(RuntimeRatio),
+    RR.sd         = sd(RuntimeRatio),
+    RR.median     = median(RuntimeRatio))
+
+fixed_geomean <- function (x) {
+  # just shift values temporarily away from 0,
+  # transformation doesn't change results when using a sufficiently large constant
+  # normally, one would use simply 1, but in this case, it may change the results
+  # fixed_geomean should really only be used in the context of stat_summary
+  m <- geometric.mean(x + 10000000)
+  m - 10000000
+}
+
+vm_stats <- stats %>%
+  group_by(VM) %>%
+  summarise(
+    geomean = fixed_geomean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+vm_stats_savina <- stats %>%
+  filter(Suite == "savina-jit") %>%
+  group_by(VM) %>%
+  summarise(
+    geomean = fixed_geomean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+conf_interval <- function(d) {
+  qt(0.95, df=length(d)-1) * sd(d) / sqrt(length(d))
+}
+col_palette <- get_safe_color_palette(2)
+
+
+
+## MULTI THREADED SAVINAv
+data_mul <- subset(data, VM %in% c("SOMns-graal-mul", "SOMns-graal-at-mul",  "SOMns-graal-art-mul"))
+
+## Calculate mean for SOMns
+somns_mul <- data_mul %>%
+  filter(VM == "SOMns-graal-mul") %>%
+  group_by(Benchmark, Suite) %>%
+  summarise(RuntimeMean = mean(Value))
+
+norm_mul <- data_mul %>%
+  left_join(somns_mul) %>%
+  group_by(Benchmark, Suite) %>%
+  transform(RuntimeRatio = Value / RuntimeMean)
+  
+stats_mul <- norm_mul %>%
+  group_by(VM, Benchmark, Suite) %>%
+  summarise(
+    Time.ms = mean(Value),
+    sd      = sd(Value),
+    RuntimeFactor = mean(RuntimeRatio),
+    RR.sd         = sd(RuntimeRatio),
+    RR.median     = median(RuntimeRatio))
+
+vm_stats_mul <- stats_mul %>%
+  group_by(VM) %>%
+  summarise(
+    geomean = fixed_geomean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+
+          
+generatePlot <- function(suite, ymin, ymax, breaks, legpos, lines) {
+  trace_names <- c("SOMns-graal" = "Baseline", "SOMns-graal-at" = "Tracing")#, "SOMns-graal-as-at-t1" = "Snapshots\n + R\\&R")#, "Infra" = "Infra")
+  trace_data <- subset(norm, VM %in% names(trace_names) & Suite == suite)
+  trace_data$VM <- revalue(trace_data$VM, trace_names)
+  tr_colors <- get_safe_color_palette(length(trace_names))
+  
+  trace_data <- droplevels(trace_data)
+  #trace_data$VM <- factor(trace_data$VM,levels(trace_data$VM)[c(2,3,1)])
+  
+  p <- ggplot(trace_data, aes(Benchmark, RuntimeRatio)) +
+    geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed")
+  
+  for (val in lines) {
+    p <- p + geom_hline(aes_string(yintercept=val), colour="#cccccc", linetype="dashed")
+  }
+
+  p <- p + geom_boxplot(outlier.size = 0.5,
+                 outlier.alpha = 0.1,
+                 outlier.shape = 22,
+                 aes(colour = VM)) +
+    stat_summary(fun = "fixed_geomean", size = 1,  colour = "#ce8080", geom = "point", mapping = aes(group = VM), position = position_dodge(width = .75)) +
+    coord_flip(ylim = c(ymin, ymax)) #
+    
+  p <- p + theme_bw() + theme_simple(font_size = 8)  +
+      theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+            legend.position=legpos,
+            legend.title = element_blank(),
+            legend.background = element_blank(),
+            strip.placement = "outside",
+            axis.title.x = element_text(size = 8),
+            axis.title.y = element_blank(),
+            plot.margin = unit(c(0,0.1,0.1,0), "cm"))
+  p <- p + ylab("Runtime Factor, normalized to\nbaseline SOMns (lower is better)")
+  p <- p + scale_color_manual(values = tr_colors) +
+    scale_y_continuous(breaks=breaks) +
+    scale_x_discrete(limits = rev(levels(trace_data$Benchmark))) +
+    guides(colour = guide_legend(reverse=TRUE))
+  return(p)
+}
+
+statsPlotOther <- function(ymin, ymax, breaks, legpos, lines) {
+  stats$Suite <- as.factor(stats$Suite)
+  trace_names <- c("savina-csp" = "CSP", "stm" = "STM", "mutex" = "ThreadsLocks")
+  trace_data <- subset(stats, Suite %in% names(trace_names) & VM == "SOMns-graal-at")
+  trace_data$Suite <- revalue(trace_data$Suite, trace_names)
+  tr_colors <- get_safe_color_palette(length(trace_names))
+  
+  trace_data <- droplevels(trace_data)
+  #trace_data$VM <- factor(trace_data$VM,levels(trace_data$VM)[c(2,3,1)])
+  
+  p <- ggplot(trace_data, aes(Suite, RuntimeFactor)) +
+    geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed")
+  
+  for (val in lines) {
+    p <- p + geom_hline(aes_string(yintercept=val), colour="#cccccc", linetype="dashed")
+  }
+
+  p <- p + geom_boxplot(outlier.size = 0.5,
+                 outlier.alpha = 1,
+                 outlier.shape = 22,
+                 #aes(colour = VM)
+                 ) +
+    stat_summary(fun = "fixed_geomean", size = 1,  colour = "#ce8080", geom = "point", mapping = aes(group = Suite), position = position_dodge(width = .75)) +
+    coord_flip(ylim = c(ymin, ymax)) #
+    
+  p <- p + theme_bw() + theme_simple(font_size = 8)  +
+      theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+            legend.position=legpos,
+            legend.title = element_blank(),
+            legend.background = element_blank(),
+            strip.placement = "outside",
+            axis.title.x = element_text(size = 8),
+            axis.title.y = element_blank(),
+            plot.margin = unit(c(0,0.1,0.1,0), "cm"))
+  p <- p + ylab("Runtime Factor, normalized to\nbaseline SOMns (lower is better)")
+  p <- p + scale_color_manual(values = tr_colors) +
+    scale_y_continuous(breaks=breaks) +
+    scale_x_discrete(limits = rev(levels(trace_data$Suite))) +
+    guides(colour = guide_legend(reverse=TRUE))
+  return(p)
+}
+
+statsPlotActor <- function(suite, ymin, ymax, breaks, legpos, lines) {
+  trace_names <- c("SOMns-graal-at" = "Sender-Side RR", "SOMns-graal-art" = "Receiver-Side RR", "SOMns-graal-at-dev" = "Specialized RR")
+  trace_data <- subset(stats, VM %in% names(trace_names) & Suite == suite)
+  trace_data$VM <- revalue(trace_data$VM, trace_names)
+  tr_colors <- get_safe_color_palette(length(trace_names))
+  
+  trace_data <- droplevels(trace_data)
+  #trace_data$VM <- factor(trace_data$VM,levels(trace_data$VM)[c(2,3,1)])
+  
+  p <- ggplot(trace_data, aes(VM, RuntimeFactor)) +
+    geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed")
+  
+  for (val in lines) {
+    p <- p + geom_hline(aes_string(yintercept=val), colour="#cccccc", linetype="dashed")
+  }
+
+  p <- p + geom_boxplot(outlier.size = 0.5,
+                 outlier.alpha = 1,
+                 outlier.shape = 22,
+                 #aes(colour = VM)
+                 ) +
+    stat_summary(fun = "fixed_geomean", size = 1,  colour = "#ce8080", geom = "point", mapping = aes(group = VM), position = position_dodge(width = .75)) +
+    coord_flip(ylim = c(ymin, ymax)) #
+    
+  p <- p + theme_bw() + theme_simple(font_size = 8)  +
+      theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+            legend.position=legpos,
+            legend.title = element_blank(),
+            legend.background = element_blank(),
+            strip.placement = "outside",
+            axis.title.x = element_text(size = 8),
+            axis.title.y = element_blank(),
+            plot.margin = unit(c(0,0.1,0.1,0), "cm"))
+  p <- p + ylab("Runtime Factor, normalized to\nbaseline SOMns (lower is better)")
+  p <- p + scale_color_manual(values = tr_colors) +
+    scale_y_continuous(breaks=breaks) +
+    scale_x_discrete(limits = rev(levels(trace_data$VM))) +
+    guides(colour = guide_legend(reverse=TRUE))
+  return(p)
+}
+
+generatePlotActor <- function(trace_names, suite, ymin, ymax, breaks, legpos, lines) {
+  trace_data <- subset(norm, VM %in% names(trace_names) & Suite == suite)
+  trace_data$VM <- revalue(trace_data$VM, trace_names)
+  tr_colors <- get_safe_color_palette(length(trace_names))
+  
+  trace_data <- droplevels(trace_data)
+  #trace_data$VM <- factor(trace_data$VM,levels(trace_data$VM)[c(2,3,1)])
+  
+  p <- ggplot(trace_data, aes(Benchmark, RuntimeRatio)) +
+    geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed")
+  
+  for (val in lines) {
+    p <- p + geom_hline(aes_string(yintercept=val), colour="#cccccc", linetype="dashed")
+  }
+
+  p <- p + geom_boxplot(outlier.size = 0.5,
+                 outlier.alpha = 0.1,
+                 outlier.shape = 22,
+                 aes(colour = VM)) +
+    stat_summary(fun = "fixed_geomean", size = 1,  colour = "#ce8080", geom = "point", mapping = aes(group = VM), position = position_dodge(width = .75)) +
+    coord_flip(ylim = c(ymin, ymax)) #
+    
+  p <- p + theme_bw() + theme_simple(font_size = 7)  +
+      theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+            legend.position=legpos,
+            legend.title = element_blank(),
+            legend.background = element_blank(),
+            legend.text=element_text(size=6),
+            strip.placement = "outside",
+            axis.title.x = element_text(size = 7),
+            axis.title.y = element_blank(),
+            plot.margin = unit(c(0,0.1,0.1,0), "cm"))
+  p <- p + ylab("Runtime Factor, normalized to\nbaseline SOMns (lower is better)")
+  p <- p + scale_color_manual(values = tr_colors) +
+    scale_y_continuous(breaks=breaks) +
+    scale_x_discrete(limits = rev(levels(trace_data$Benchmark))) +
+    guides(colour = guide_legend(reverse=TRUE))
+  return(p)
+}
+
+generatePlotActorMT <- function(trace_names, suite, ymin, ymax, breaks, legpos, lines) {
+  trace_data <- subset(norm_mul, VM %in% names(trace_names) & Suite == suite)
+  trace_data$VM <- revalue(trace_data$VM, trace_names)
+  tr_colors <- get_safe_color_palette(length(trace_names))
+  
+  trace_data <- droplevels(trace_data)
+  #trace_data$VM <- factor(trace_data$VM,levels(trace_data$VM)[c(2,3,1)])
+  
+  p <- ggplot(trace_data, aes(Benchmark, RuntimeRatio)) +
+    geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed")
+  
+  for (val in lines) {
+    p <- p + geom_hline(aes_string(yintercept=val), colour="#cccccc", linetype="dashed")
+  }
+
+  p <- p + geom_boxplot(outlier.size = 0.5,
+                 outlier.alpha = 0.1,
+                 outlier.shape = 22,
+                 aes(colour = VM)) +
+    stat_summary(fun = "fixed_geomean", size = 1,  colour = "#ce8080", geom = "point", mapping = aes(group = VM), position = position_dodge(width = .75)) +
+    coord_flip(ylim = c(ymin, ymax)) #
+    
+  p <- p + theme_bw() + theme_simple(font_size = 7)  +
+      theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+            legend.position=legpos,
+            legend.title = element_blank(),
+            legend.background = element_blank(),
+            legend.text=element_text(size=6),
+            strip.placement = "outside",
+            axis.title.x = element_text(size = 7),
+            axis.title.y = element_blank(),
+            plot.margin = unit(c(0,0.1,0.1,0), "cm"))
+  p <- p + ylab("Runtime Factor, normalized to\nbaseline SOMns (lower is better)")
+  p <- p + scale_color_manual(values = tr_colors) +
+    scale_y_continuous(breaks=breaks) +
+    scale_x_discrete(limits = rev(levels(trace_data$Benchmark))) +
+    guides(colour = guide_legend(reverse=TRUE))
+  return(p)
+}
+
+statsPlotTrace <- function(ymin, ymax, breaks, legpos, lines) {
+  trace_names <- c("SOMns_graal_at" = "Sender-Side RR", "SOMns_graal_art" = "Receiver-Side RR")#, "SOMns_graal_at_dev" = "Specialized RR")
+  trace_data <- subset(trace_stats_plot, VM %in% names(trace_names) & TraceFactor > 0)
+  trace_data$VM <- revalue(trace_data$VM, trace_names)
+  tr_colors <- get_safe_color_palette(length(trace_names))
+  
+  trace_data <- droplevels(trace_data)
+  #trace_data$VM <- factor(trace_data$VM,levels(trace_data$VM)[c(2,3,1)])
+  
+  p <- ggplot(trace_data, aes(VM, TraceFactor)) +
+    geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed")
+  
+  for (val in lines) {
+    p <- p + geom_hline(aes_string(yintercept=val), colour="#cccccc", linetype="dashed")
+  }
+
+  p <- p + geom_boxplot(outlier.size = 0.5,
+                 outlier.alpha = 1,
+                 outlier.shape = 22,
+                 #aes(colour = VM)
+                 ) +
+    stat_summary(fun = "fixed_geomean", size = 1,  colour = "#ce8080", geom = "point", mapping = aes(group = VM), position = position_dodge(width = .75)) +
+    coord_flip(ylim = c(ymin, ymax)) #
+    
+  p <- p + theme_bw() + theme_simple(font_size = 8)  +
+      theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+            legend.position=legpos,
+            legend.title = element_blank(),
+            legend.background = element_blank(),
+            strip.placement = "outside",
+            axis.title.x = element_text(size = 8),
+            axis.title.y = element_blank(),
+            plot.margin = unit(c(0,0.1,0.1,0), "cm"))
+  p <- p + ylab("Trace Size Factor, normalized to\nspecialized RR (lower is better)")
+  p <- p + scale_color_manual(values = tr_colors) +
+    scale_y_continuous(breaks=breaks) +
+    scale_x_discrete(limits = rev(levels(trace_data$VM))) +
+    guides(colour = guide_legend(reverse=TRUE))
+  return(p)
+}
+
+#Actor macro data
+macro <- stats %>% filter(VM == "SOMns-graal-at" & Suite == "savina-jit") %>%
+          select(Benchmark, RuntimeFactor)
+
+MinimalSavinaRF <- (min(macro$RuntimeFactor) - 1) * 100
+MaximalSavinaRF <- (max(macro$RuntimeFactor) - 1) * 100
+MaxSavinaRF <- max(macro$RuntimeFactor)
+
+savina_stats <- macro %>%
+  group_by(VM) %>%
+  summarise(
+    geomean = fixed_geomean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+          
+Savina_Avg_OH <- (savina_stats$geomean - 1) *100
+
+
+macro <- stats %>% filter(VM == "SOMns-graal-art" & Suite == "savina-jit") %>%
+          select(Benchmark, RuntimeFactor)
+
+MinimalSavinaRSRF <- (min(macro$RuntimeFactor) - 1) * 100
+MaximalSavinaRSRF <- (max(macro$RuntimeFactor) - 1) * 100
+MaxSavinaRSRF <- max(macro$RuntimeFactor)
+
+savina_stats <- macro %>%
+  group_by(VM) %>%
+  summarise(
+    geomean = fixed_geomean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+          
+SavinaRS_Avg_OH <- (savina_stats$geomean - 1) *100
+
+
+#CSP macro data
+macro <- stats %>% filter(VM == "SOMns-graal-at" & Suite == "savina-csp") %>%
+          select(Benchmark, RuntimeFactor)
+
+MinimalCSPRF <- (min(macro$RuntimeFactor) - 1) * 100
+MaximalCSPRF <- (max(macro$RuntimeFactor) - 1) * 100
+MaxCSPRF <- max(macro$RuntimeFactor)
+
+csp_stats <- macro %>%
+  group_by(VM) %>%
+  summarise(
+    geomean = fixed_geomean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+          
+CSP_Avg_OH <- (csp_stats$geomean - 1) *100
+
+
+#STM macro data
+macro <- stats %>% filter(VM == "SOMns-graal-at" & Suite == "stm") %>%
+          select(Benchmark, RuntimeFactor)
+
+MinimalSTMRF <- (min(macro$RuntimeFactor) - 1) * 100
+MaximalSTMRF <- (max(macro$RuntimeFactor) - 1) * 100
+MaxSTMRF <- max(macro$RuntimeFactor)
+
+stm_stats <- macro %>%
+  group_by(VM) %>%
+  summarise(
+    geomean = fixed_geomean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+          
+STM_Avg_OH <- (stm_stats$geomean - 1) *100
+
+
+#mutex macro data
+macro <- stats %>% filter(VM == "SOMns-graal-at" & Suite == "mutex") %>%
+          select(Benchmark, RuntimeFactor)
+
+MinimalMutexRF <- (min(macro$RuntimeFactor) - 1) * 100
+MaximalMutexRF <- (max(macro$RuntimeFactor) - 1) * 100
+MaxMutexRF <- max(macro$RuntimeFactor)
+
+mutex_stats <- macro %>%
+  group_by(VM) %>%
+  summarise(
+    geomean = fixed_geomean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+          
+Mutex_Avg_OH <- (mutex_stats$geomean - 1) *100
+
+
+
+#old replay macro data
+macro <- stats %>% filter(VM == "SOMns-graal-at-dev") %>%
+          select(Benchmark, RuntimeFactor)
+
+MinimalSavinaOldRF <- (min(macro$RuntimeFactor) - 1) * 100
+MaximalSavinaOldRF <- (max(macro$RuntimeFactor) - 1) * 100
+MaxSavinaOldRF <- max(macro$RuntimeFactor)
+
+savinaOld_stats <- macro %>%
+  group_by(VM) %>%
+  summarise(
+    geomean = fixed_geomean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+          
+SavinaOld_Avg_OH <- (savinaOld_stats$geomean - 1) *100
+
+
+#multi paradigm macros
+macro <- stats %>% filter(Suite == "multi-paradigm", VM== "SOMns-graal-at") %>%
+          select(Benchmark, RuntimeFactor)
+          
+MultiParadigm_Avg_OH <- (macro$RuntimeFactor - 1) *100
+
+
+
+#trace stats
+macro <- statsTrace %>% filter(`Trace_SOMns_graal_at` > 0 & `Trace_SOMns_graal_at_dev` > 0) #%>%
+          #select(Benchmark, `TraceFactor_SOMns_graal_at`)
+
+MinimalTraceF <- (min(macro$TraceFactor_SOMns_graal_at) - 1) * 100
+MaximalTraceF <- (max(macro$TraceFactor_SOMns_graal_at) - 1) * 100
+
+
+trace_stats <- macro %>%
+  summarise(
+    geomean = fixed_geomean(macro$TraceFactor_SOMns_graal_at),
+    min = min(macro$TraceFactor_SOMns_graal_at),
+    max = max(macro$TraceFactor_SOMns_graal_at))
+          
+Trace_Avg_OH <- (trace_stats$geomean - 1) *100
+
+MinimalTraceFRS <- (min(macro$TraceFactor_SOMns_graal_art) - 1) * 100
+MaximalTraceFRS <- (max(macro$TraceFactor_SOMns_graal_art) - 1) * 100
+
+trace_stats <- macro %>%
+  summarise(
+    geomean = fixed_geomean(macro$TraceFactor_SOMns_graal_art),
+    min = min(macro$TraceFactor_SOMns_graal_art),
+    max = max(macro$TraceFactor_SOMns_graal_art))
+          
+Trace_Avg_OHRS <- (trace_stats$geomean - 1) *100
+
+
+SavinaAvgOverheadSSD <- (vm_stats_savina %>% filter(VM == "SOMns-graal-at-ssd"))$geomean
+SavinaAvgOverheadHDD <- (vm_stats_savina %>% filter(VM == "SOMns-graal-at-hdd"))$geomean
+SavinaHDDoverSSD <- (SavinaAvgOverheadHDD -1) / (SavinaAvgOverheadSSD -1)
+
+disk <- data %>% filter(VM %in% c("SOMns-graal-at-ssd", "SOMns-graal-at-hdd") & Suite == "savina-jit")
+disk <- droplevels(disk)
+ssd <- disk %>%
+  filter(VM == "SOMns-graal-at-ssd") %>%
+  group_by(Benchmark, Suite) %>%
+  summarise(RuntimeMean = mean(Value))
+
+disknorm <- disk %>%
+  left_join(ssd) %>%
+  group_by(Benchmark, Suite) %>%
+  transform(RuntimeRatio = Value / RuntimeMean)
+  
+diskstats <- disknorm %>%
+  group_by(VM, Benchmark, Suite) %>%
+  summarise(
+    Time.ms = mean(Value),
+    sd      = sd(Value),
+    RuntimeFactor = mean(RuntimeRatio),
+    RR.sd         = sd(RuntimeRatio),
+    RR.median     = median(RuntimeRatio))
+
+disk_vm_stats <- diskstats %>%
+  filter(VM == "SOMns-graal-at-hdd") %>%
+  group_by(VM) %>%
+  summarise(
+    geomean = fixed_geomean(RuntimeFactor),
+    min = min(RuntimeFactor),
+    max = max(RuntimeFactor))
+
+plotWarmup <- function(suite){
+  data100 <- warmupData
+  col_palette <- get_safe_color_palette(2)
+  trace_names <- c("SOMns-graal" = "Baseline", "SOMns-graal-at" = "Tracing")#, "Infra" = "Infra")
+  mdat <- subset(data100, VM %in% names(trace_names))
+  mdat <- mdat %>%
+    filter(Suite == suite)
+  mdat$VM <- revalue(mdat$VM, trace_names)
+  mdat <- mdat %>%
+    group_by(Benchmark, VM, Iteration) %>%
+    summarise(Mean = mean(Value),
+              confMin = mean(Value) - conf_interval(Value),
+              confMax = mean(Value) + conf_interval(Value))
+  mdat <- mdat %>%
+    #filter(Iteration %% 10 == 1)
+    filter(Iteration > 100)
+  
+  p <- ggplot(mdat, aes(x = Iteration, y = Mean)) +
+    facet_wrap(~Benchmark, ncol=5, strip.position = "top", scales = "free") +
+    #scale_y_log10() +
+    geom_ribbon(aes(ymin=confMin, ymax=confMax, fill = VM), alpha = 0.3) +
+    geom_line(aes(y = Mean, colour = VM)) +
+    scale_color_manual(values = col_palette) +
+    scale_fill_manual(values = col_palette)
+  
+  p + theme_simple(font_size = 8) +
+    ylab("runtime (ms)\n(lower is better)") +
+    xlab("Itertion") +
+    theme(plot.margin = unit(c(0,0,0.1,0.1), "cm"),
+          axis.title.x = element_text(size = 8),
+          legend.text = element_text(size=8),
+          legend.title = element_blank(),
+          legend.position = c(1, 0),
+          legend.justification = c(1, 0)
+          )#legend.position = "none")
+}
+
+plotGCTime<- function(suite){
+  col_palette <- get_safe_color_palette(2)
+  trace_names <- c("SOMns-graal" = "Baseline", "SOMns-graal-at" = "Tracing")#, "Infra" = "Infra")
+  mdat <- subset(memdata, VM %in% names(trace_names))
+  mdat <- mdat %>%
+    filter(Suite ==suite)
+  mdat$VM <- revalue(mdat$VM, trace_names)
+  mdat <- mdat %>%
+    filter(Criterion == "gc-time") %>%
+    group_by(Benchmark, VM, Iteration) %>%
+    summarise(MemMean = mean(Value),
+              confMin = mean(Value) - conf_interval(Value),
+              confMax = mean(Value) + conf_interval(Value))
+  mdat <- mdat %>%
+    filter(Iteration %% 10 == 1)
+  
+  p <- ggplot(mdat, aes(x = Iteration, y = MemMean)) +
+    facet_wrap(~Benchmark, ncol=5, strip.position = "top", scales = "free") +
+    #scale_y_log10() +
+    geom_ribbon(aes(ymin=confMin, ymax=confMax, fill = VM), alpha = 0.3) +
+    geom_line(aes(y = MemMean, colour = VM)) +
+    scale_color_manual(values = col_palette) +
+    scale_fill_manual(values = col_palette)
+  p + theme_simple(font_size = 8) +
+    ylab("GC time (ms)\n(lower is better)") +
+    xlab("Itertion") +
+    theme(plot.margin = unit(c(0,0,0.1,0.1), "cm"),
+          axis.title.x = element_text(size = 8),
+          legend.text = element_text(size=8),
+          legend.title = element_blank(),
+          legend.position = c(1, 0),
+          legend.justification = c(1, 0)
+          )#legend.position = "none")
+}
+
+
+plotCollectedBytes <- function(suite){
+  # Collected Bytes Plot
+  col_palette <- get_safe_color_palette(2)
+  
+  trace_names <- c("SOMns-graal" = "Baseline", "SOMns-graal-at" = "Tracing")#, "Infra" = "Infra")
+  mdat <- subset(memdata, VM %in% names(trace_names))
+  mdat <- mdat %>%
+    filter(Suite ==suite)
+  mdat$VM <- revalue(mdat$VM, trace_names)
+  mdat <- mdat %>%
+    filter(Criterion == "collected") %>%
+    group_by(Benchmark, VM, Iteration) %>%
+    summarise(MemMean = mean(Value/1000000000),
+              confMin = mean(Value/1000000000) - conf_interval(Value/1000000000),
+              confMax = mean(Value/1000000000) + conf_interval(Value/1000000000))
+  mdat <- mdat %>%
+    filter(Iteration %% 10 == 1)
+  
+  p <- ggplot(mdat, aes(x = Iteration, y = MemMean)) +
+    facet_wrap(~Benchmark, ncol=5, strip.position = "top", scales = "free") +
+    #scale_y_log10() +
+    geom_ribbon(aes(ymin=confMin, ymax=confMax, fill = VM), alpha = 0.3) +
+    geom_line(aes(y = MemMean, colour = VM)) +
+    scale_color_manual(values = col_palette) +
+    scale_fill_manual(values = col_palette)
+  p + theme_simple(font_size = 8) +
+    ylab("Collected bytes (GB)\n(lower is better)") +
+    xlab("Itertion") +
+    theme(plot.margin = unit(c(0,0,0.1,0.1), "cm"),
+          axis.title.x = element_text(size = 8),
+          legend.text = element_text(size=8),
+          legend.title = element_blank(),
+          legend.position = c(1, 0),
+          legend.justification = c(1, 0)
+          )#legend.position = "none")
+}
+
+plotHeapSize <- function(suite){
+  # Heapsize Plot
+  col_palette <- get_safe_color_palette(2)
+  trace_names <- c("SOMns-graal" = "Baseline", "SOMns-graal-at" = "Tracing")#, "Infra" = "Infra")
+  mdat <- subset(memdata, VM %in% names(trace_names))
+  mdat <- mdat %>%
+    filter(Suite ==suite)
+  mdat$VM <- revalue(mdat$VM, trace_names)
+  mdat <- mdat %>%
+    filter(Criterion == "heap") %>%
+    group_by(Benchmark, VM, Iteration) %>%
+    summarise(MemMean = mean(Value/1000000),
+              confMin = mean(Value/1000000) - conf_interval(Value/1000000),
+              confMax = mean(Value/1000000) + conf_interval(Value/1000000))
+  mdat <- mdat %>%
+    filter(Iteration %% 10 == 1)
+  
+  p <- ggplot(mdat, aes(x = Iteration, y = MemMean)) +
+    facet_wrap(~Benchmark, ncol=5, strip.position = "top", scales = "free") +
+    #scale_y_log10() +
+    geom_ribbon(aes(ymin=confMin, ymax=confMax, fill = VM), alpha = 0.3) +
+    geom_line(aes(y = MemMean, colour = VM)) +
+    scale_color_manual(values = col_palette) +
+    scale_fill_manual(values = col_palette)
+  p + theme_simple(font_size = 8) +
+    ylab("Max heap size(MB)\n(lower is better)") +
+    xlab("Itertion") +
+    theme(plot.margin = unit(c(0,0,0.1,0.1), "cm"),
+          axis.title.x = element_text(size = 8),
+          legend.text = element_text(size=8),
+          legend.title = element_blank(),
+          legend.position = c(1, 0),
+          legend.justification = c(1, 0),
+          
+          )#legend.position = "none")
+}
+
+##
+generatePlotActorx <- function(trace_names, suite, ymin, ymax, breaks, legpos, lines) {
+  trace_data <- subset(norm, VM %in% names(trace_names) & Suite == suite)
+  trace_data$VM <- revalue(trace_data$VM, trace_names)
+  tr_colors <- get_safe_color_palette(length(trace_names))
+  
+  trace_data <- droplevels(trace_data)
+  #trace_data$VM <- factor(trace_data$VM,levels(trace_data$VM)[c(2,3,1)])
+  
+  p <- ggplot(trace_data, aes(Benchmark, RuntimeRatio)) +
+    geom_hline(aes(yintercept=1), colour="#cccccc", linetype="dashed")
+  
+  for (val in lines) {
+    p <- p + geom_hline(aes_string(yintercept=val), colour="#cccccc", linetype="dashed")
+  }
+
+  p <- p + geom_boxplot(outlier.size = 0.5,
+                 outlier.alpha = 0.1,
+                 outlier.shape = 22,
+                 aes(colour = VM)) +
+  stat_summary(fun = "fixed_geomean", size = 1,  colour = "#ce8080", geom = "point", mapping = aes(group = VM), position = position_dodge(width = .75))+
+  coord_cartesian(ylim=c(ymin, ymax))
+    
+  p <- p + theme_bw() + theme_simple(font_size = 7)  +
+      theme(axis.text.x = element_text(angle= 90, vjust=0.5, hjust=1),
+            legend.position=legpos,
+            legend.title = element_blank(),
+            legend.background = element_blank(),
+            legend.text=element_text(size=6),
+            strip.placement = "outside",
+            axis.title.y = element_text(size = 7),
+            axis.title.x = element_blank(),
+            plot.margin = unit(c(0,0.1,0.1,0), "cm"))
+  p <- p + ylab("Runtime Factor, normalized to\nbaseline SOMns (lower is better)")
+  p <- p + scale_color_manual(values = tr_colors) +
+    scale_y_continuous(breaks=breaks) +
+    scale_x_discrete(limits = rev(levels(trace_data$Benchmark))) +
+    guides(colour = guide_legend(reverse=TRUE))#+ ylim(ymin, ymax)
+  return(p)
+}
+
+trace_names <- c("SOMns-graal-at" = "Sender-Side", "SOMns-graal-art" = "Receiver-Side", "SOMns-graal-at-dev" = "Specialized")
+p <- generatePlotActorx(trace_names, "savina-jit", 0.65, 2, c(1,1.1,1.2,1.3,1.4), c(0.9,0.17), c(1.1, 1.2))
+p
+
+trace_names <- c("SOMns-graal-at" = "No-Writing", "SOMns-graal-at-hdd" = "HDD", "SOMns-graal-at-ssd" = "SSD")
+p <- generatePlotActorx(trace_names, "savina-jit", 0.65, 3, c(1,1.1,1.2,1.3,1.4, 1.5, 2), c(0.75,0.85), c(1.1, 1.2, 1.5, 2, 2.5))
+p
+
+@
+
+\def\PerformanceSTM{%
+<<savina-performance-stm, fig.height=2, fig.width=5>>=
+p <- generatePlot("stm", 0.93, 1.15, c(0.95, 1, 1.05, 1.1), c(0.82,0.25), c(0.95,1.05)) 
+p
+@
+}%
+
+\def\PerformanceActors{%
+<<savina-performance-actors, fig.height=7.0, fig.width=2.6, dev='pdf'>>=
+trace_names <- c("SOMns-graal-at" = "Sender-Side", "SOMns-graal-art" = "Receiver-Side", "SOMns-graal-at-dev" = "Specialized")
+p <- generatePlotActor(trace_names, "savina-jit", 0.9, 1.75, c(1,1.1,1.2,1.3,1.4), c(0.75,0.5), c(1.1, 1.2))
+p
+@
+}%
+
+\def\PerformanceActorsMul{%
+<<savina-performance-actors-mul, fig.height=7.0, fig.width=5, dev='pdf'>>=
+trace_names <- c("SOMns-graal-mul" = "Baseline", "SOMns-graal-at-mul" = "Sender-Side", "SOMns-graal-art-mul" = "Receiver-Side")
+p <- generatePlotActorMT(trace_names, "savina-jit", 0.2, 4, c(0.5,1,1.1,1.2,1.5, 2, 2.5,3,4), c(0.75,0.25), c(0.5,1.1, 1.2, 1.5, 2, 3))
+p
+@
+}%
+
+\def\PerformanceActorsBaseline{%
+<<savina-performance-actors-baseline, fig.height=3.5, fig.width=5, dev='pdf'>>=
+trace_names <- c("SOMns-graal" = "Baseline")
+p <- generatePlotActor(trace_names, "savina-jit", 0.85, 1.3, c(0.9,1,1.1,1.2,1.3,1.4), c(0.79,0.075), c(1.1, 1.2))
+p
+@
+}%
+
+\def\PerformanceActorsDisks{%
+<<savina-performance-disks, fig.height=7.0, fig.width=5, dev='pdf'>>=
+trace_names <- c("SOMns-graal-at" = "No-Writing", "SOMns-graal-at-hdd" = "HDD", "SOMns-graal-at-ssd" = "SSD")
+p <- generatePlotActor(trace_names, "savina-jit", 0.95, 3, c(1,1.1,1.2,1.3,1.4, 1.5, 2, 3), c(0.75,0.85), c(1.1, 1.2, 1.5, 2, 2.5))
+p
+@
+}%
+
+\def\PerformanceStatsActors{%
+<<savina-performance-stats-actors, fig.height=1.3, fig.width=2.6>>=
+p <- statsPlotActor("savina-jit", 0.95, 1.4, c(1,1.1,1.2), c(0.79,0.075), c(1.1, 1.2))
+p
+@
+}%
+
+\def\PerformanceStatsOthers{%
+<<savina-performance-stats-other, fig.height=1.3, fig.width=2.6>>=
+p <- statsPlotOther(0.8, 1.75, c(0.9,1,1.1,1.2,1.5), c(0.79,0.075), c(0.9,1.1, 1.2))
+p
+@
+}%
+
+\def\TraceStatsActors{%
+<<savina-trace-stats-actors, fig.height=1, fig.width=2.6>>=
+p <- statsPlotTrace( 0.5, 1.75, c(0.5,1,1.25,1.5, 1.75), c(0.79,0.075), c(0.5,1.5, 1.75))
+p
+@
+}%
+
+\def\PerformanceCSP{%
+<<savina-performance-csp, fig.height=2, fig.width=5>>=
+p <- generatePlot("savina-csp", 0.4, 2, c(1,1.2), c(0.82,0.25), c(1.1, 1.2)) 
+p
+@
+}%
+
+\def\PerformanceMutex{%
+<<savina-performance-mutex, fig.height=2, fig.width=5>>=
+p <- generatePlot("mutex", 0.9, 1.3, c(1,1.1,1.2,1.5), c(0.82,0.25), c(1.1, 1.2))
+p
+@
+}%
+
+\def\PerformanceMultiParadigm{%
+<<savina-performance-multiParadigm, fig.height=1.3, fig.width=2.6>>=
+p <- generatePlot("multi-paradigm", 0.5, 1.5, c(0.5,0.75,1,1.25,1.5,1.8), c(0.82,0.35), c(0.75, 1.25, 1.5))
+p
+@
+}%
+
+\def\SavinaTraceDataTable{%
+<<savina-tracing-table, results='asis', echo=FALSE>>=
+
+statsTrace <- statsTrace %>% droplevels()
+
+#t <- tabular(Justify("l")*Heading()*Benchmark ~
+#             (Justify("c")*Heading('Mean MB/Iteration')*
+#               Justify("r")*Format(sprintf("%.2f"))*(
+#                 (Heading("Sender-Side")*Trace_SOMns_graal_at + 
+#                  Heading("Receiver-Side")*Trace_SOMns_graal_art + 
+#                  Heading("Specialized")*Trace_SOMns_graal_at_dev)*Heading()*identity)) + 
+#                  Heading("Sender Factor")*Justify("r")*Format(sprintf("%.2f"))*TraceFactor_SOMns_graal_at*Heading()*identity + 
+#                  Heading("Receiver Factor")*Justify("r")*Format(sprintf("%.2f"))*TraceFactor_SOMns_graal_art*Heading()*identity, data=statsTrace)
+#                  table_options(justification="c ")
+
+t <- tabular(Justify("l")*Heading()*Benchmark ~
+             (Justify("c")*Heading('Mean MB/Iteration')*
+               (Justify("r")*Format(sprintf("%.2f"))*
+                 (Heading("Sender Side")*Trace_SOMns_graal_at + 
+                  Heading("Receiver Side")*Trace_SOMns_graal_art + 
+                  Heading("Specialized")*Trace_SOMns_graal_at_dev)*Heading()*identity)) + 
+             (Justify("c")*Heading('Size Factor')*
+                Justify("r")*Format(sprintf("%.2f"))*(
+               (Heading("Sender Side")*TraceFactor_SOMns_graal_at +
+                Heading("Receiver Side")*TraceFactor_SOMns_graal_art)*Heading()*identity)), data=statsTrace)
+                  table_options(justification="c ")
+                  
+latex(t)
+@
+}%
+
+\newcommand{\SavinaRMinOverheadP}{
+  \Sexpr{X0(MinimalSavinaRF)
+}\%\xspace}
+
+\newcommand{\SavinaRMaxOverheadP}{
+  \Sexpr{X0(MaximalSavinaRF)
+}\%\xspace}
+
+\newcommand{\SavinaRAvgOverheadP}{
+  \Sexpr{X0(Savina_Avg_OH)
+}\%\xspace}
+
+
+\newcommand{\SavinaMinOverheadP}{
+  \Sexpr{X2(MinimalSavinaRF)
+}\%\xspace}
+
+\newcommand{\SavinaMaxOverheadP}{
+  \Sexpr{X2(MaximalSavinaRF)
+}\%\xspace}
+
+\newcommand{\SavinaMaxOverhead}{
+  \Sexpr{X0(MaxSavinaRF)
+}x\xspace}
+
+\newcommand{\SavinaAvgOverheadP}{
+  \Sexpr{X2(Savina_Avg_OH)
+}\%\xspace}
+
+
+\newcommand{\CSPMinOverheadP}{
+  \Sexpr{X2(MinimalCSPRF)
+}\%\xspace}
+
+\newcommand{\CSPMaxOverheadP}{
+  \Sexpr{X2(MaximalCSPRF)
+}\%\xspace}
+
+\newcommand{\CSPMaxOverhead}{
+  \Sexpr{X0(MaxCSPRF)
+}x\xspace}
+
+\newcommand{\CSPAvgOverheadP}{
+  \Sexpr{X2(CSP_Avg_OH)
+}\%\xspace}
+
+
+\newcommand{\STMMinOverheadP}{
+  \Sexpr{X2(MinimalSTMRF)
+}\%\xspace}
+
+\newcommand{\STMMaxOverheadP}{
+  \Sexpr{X2(MaximalSTMRF)
+}\%\xspace}
+
+\newcommand{\STMMaxOverhead}{
+  \Sexpr{X0(MaxSTMRF)
+}x\xspace}
+
+\newcommand{\STMAvgOverheadP}{
+  \Sexpr{X2(STM_Avg_OH)
+}\%\xspace}
+
+\newcommand{\MutexMinOverheadP}{
+  \Sexpr{X2(MinimalMutexRF)
+}\%\xspace}
+
+\newcommand{\MutexMaxOverheadP}{
+  \Sexpr{X2(MaximalMutexRF)
+}\%\xspace}
+
+\newcommand{\MutexMaxOverhead}{
+  \Sexpr{X0(MaxMutexRF)
+}x\xspace}
+
+\newcommand{\MutexAvgOverheadP}{
+  \Sexpr{X2(Mutex_Avg_OH)
+}\%\xspace}
+
+
+\newcommand{\SavinaOldMinOverheadP}{
+  \Sexpr{X2(MinimalSavinaOldRF)
+}\%\xspace}
+
+\newcommand{\SavinaOldMaxOverheadP}{
+  \Sexpr{X2(MaximalSavinaOldRF)
+}\%\xspace}
+
+\newcommand{\SavinaOldMaxOverhead}{
+  \Sexpr{X0(MaxSavinaOldRF)
+}x\xspace}
+
+\newcommand{\SavinaOldAvgOverheadP}{
+  \Sexpr{X2(SavinaOld_Avg_OH)
+}\%\xspace}
+
+\newcommand{\TraceMinOverheadP}{
+  \Sexpr{X0(MinimalTraceF)
+}\%\xspace}
+
+\newcommand{\TraceMaxOverheadP}{
+  \Sexpr{X0(MaximalTraceF)
+}\%\xspace}
+
+\newcommand{\TraceAvgOverheadP}{
+  \Sexpr{X0(Trace_Avg_OH)
+}\%\xspace}
+
+
+\newcommand{\TraceRSMinOverheadP}{
+  \Sexpr{X0(MinimalTraceFRS)
+}\%\xspace}
+
+\newcommand{\TraceRSMaxOverheadP}{
+  \Sexpr{X0(MaximalTraceFRS)
+}\%\xspace}
+
+\newcommand{\TraceRSAvgOverheadP}{
+  \Sexpr{X0(Trace_Avg_OHRS)
+}\%\xspace}
+
+\newcommand{\MultiParadigmOverheadP}{
+  \Sexpr{X0(MultiParadigm_Avg_OH)
+}\%\xspace}
+
+
+\newcommand{\SavinaRSMinOverheadP}{
+  \Sexpr{X2(MinimalSavinaRSRF)
+}\%\xspace}
+
+\newcommand{\SavinaRSMaxOverheadP}{
+  \Sexpr{X2(MaximalSavinaRSRF)
+}\%\xspace}
+
+\newcommand{\SavinaRSAvgOverheadP}{
+  \Sexpr{X2(SavinaRS_Avg_OH)
+}\%\xspace}
+
+\newcommand{\SavinaAvgOverheadHDDvsSSD}{
+  \Sexpr{X2((disk_vm_stats$geomean - 1)*100)
+}\%\xspace}
+
+\newcommand{\SavinaMinOverheadHDDvsSSD}{
+  \Sexpr{X2((disk_vm_stats$min - 1)*100)
+}\%\xspace}
+
+\newcommand{\SavinaMaxOverheadHDDvsSSD}{
+  \Sexpr{X2((disk_vm_stats$max - 1)*100)
+}\%\xspace}
