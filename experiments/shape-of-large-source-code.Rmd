@@ -1,0 +1,532 @@
+---
+title: "The Shape of 1.4M Lines of Code"
+author: "Stefan Marr"
+date: "11/12/2020"
+output: html_document
+---
+
+
+```{r setup, echo=FALSE, include=FALSE, cache=FALSE}
+if (!suppressPackageStartupMessages(library(here, logical.return=TRUE))) {
+  install.packages("here", repos="https://cloud.r-project.org/")
+  library(here)
+}
+source(here("libs", "common.R"), chdir = TRUE)
+
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  dev = "ragg_png",
+  dpi = 192) #  dpi = 192
+
+knitr::knit_hooks$set(
+  plot = function(x, options) {
+    cap  <- options$fig.cap  # figure caption
+    tags <- htmltools::tags
+    as.character(tags$img(src = x, alt = cap))
+  }
+)
+
+# install.packages("ParetoPosStable")
+library(ParetoPosStable)
+
+base_dir <- '/Users/smarr/Projects/Smalltalk-Code-Characteristics/data-2020-12/'
+
+classes_files <- c(
+  './part-2/internal/classes.csv',
+  './part-1/internal/classes.csv'
+)
+
+method_files <- c(
+  './part-2/internal/methods.csv',
+  './part-1/internal/methods.csv'
+)
+
+load_all <- function (file_names) {
+  file_names %>%
+    map(function (file_name) {
+      cat(file_name, " ")
+      read.csv(paste0(base_dir, file_name))
+    }) %>%
+    reduce(rbind)
+}
+
+unify_projects <- function(input_data) {
+  # This makes sure that relate projects are treated as one.
+  # Typically these projects don't use the subpackage notation but for our
+  # purposes are related nontheless.
+  input_data %>%
+    mutate(project = ifelse(str_starts(project, "SmaCC"), "SmaCC", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Petit"), "Petit", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Code"), "Code", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Deprecated"), "Deprecated", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Enlumineur"), "Enlumineur", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Famix"), "Famix", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Metacello"), "Metacello", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Monticello"), "Monticello", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Scripting"), "Scripting", project)) %>%
+    mutate(project = ifelse(str_detect(project, "FFI"), "FFI", project))
+}
+
+classes_data <- load_all(classes_files) %>%
+  select(-X) %>%
+  distinct(class, .keep_all = TRUE)
+classes_data$isTestClass <- as.logical(classes_data$isTestClass)
+classes_data <- classes_data %>%
+  unify_projects()
+
+methods_data <- load_all(method_files) %>%
+  select(-c(X, id)) %>%
+  distinct(class, selector, .keep_all = TRUE)
+methods_data$isTestClass <- as.logical(methods_data$isTestClass)
+methods_data <- methods_data %>%
+  unify_projects()
+```
+
+Recently, I was wondering how large code bases look like when it comes to
+the basic properties compiler might care about. And here I am not thinking about
+dynamic properties, but simply static properties such as length of methods,
+number of methods per class, number of fields, and so on.
+
+I think there are a whole bunch of studies that ask questions related to this.
+And a quick search let me to a report titled [Characterizing Pharo Code](https://hal.inria.fr/hal-02440055/document) by Zaitsev et al.,
+which also comes with the code the authors used to answer their questions.
+
+Though, the report focuses on more high-level questions than what I had in mind.
+With [a bit of extra effort](https://github.com/smarr/SourceCodeDataCollector/tree/extra-data), I managed to collect the data I was looking for.
+
+In the remainder of this post, I'll look at the collected data.
+
+```{r calc-size, cache=TRUE}
+num_projects <- length(levels(factor(methods_data$project)))
+num_packages <- length(levels(factor(methods_data$package)))
+
+# note that methods_data and classes_data give slightly different results because
+# of the extension methods. So, the classes_data is better, because
+# it doesn't have unwanted duplication.
+num_classes  <- length(levels(factor(classes_data$class)))
+num_test_classes <- length(levels(factor((classes_data %>% filter(isTestClass))$class)))
+
+num_methods <- nrow(methods_data)
+num_test_methods <- nrow(methods_data %>% filter(isTestClass))
+```
+
+## Methodology
+
+The report by Zaitsev et al. selected Pharo projects that represent a variety of
+different domains, widely used and less widely used projects,
+small and large ones, as well as active and less active projects.
+I kept the same selection of projects, but with a slightly more recent
+set of commits to look at.
+
+Furthermore, I included the whole Pharo 8.0 base system and all loaded
+dependencies, which didn't seem to be the case in the original analysis.
+
+A full list of projects and commits is included at the end of this post.
+Overall, the analysis considers `r pretty(num_projects)` projects, with
+`r pretty(num_packages)` packages in total.
+A "project" is here a set of Pharo packages that are related by name.
+This includes for instance [Moose](https://moosetechnology.org/),
+a platform for software and data analysis, [Seaside](http://www.seaside.st/),
+a web application framework, [Roassal](http://agilevisualization.com/), scripting
+for visualizations, and various other packages, including the Pharo system itself.
+
+Since Pharo has the classic introspection/reflection facilities of Smalltalk
+systems, I use them to collect the structural metrics, including lines of code,
+number of methods, classes, arguments, and local variables.
+
+## Size of the Overall Code Base
+
+As mentioned earlier, the code base under investigation is composed of
+`r pretty(num_projects)` projects.
+These projects contain `r pretty(num_classes)` classes,
+of which `r pretty(num_test_classes)` classes are unit tests. 
+Overall, there are `r pretty(num_methods)` methods in the system,
+of which `r pretty(num_test_methods)` are on test classes.
+
+This means, about `r pro(num_test_classes/num_classes)`% of the classes
+and `r pro(num_test_methods/num_methods)`% of the methods are related to tests.
+Since this seems to be a rather small number, I'll keep the test code in
+the analysis even so the code may have different general properties.
+
+```{r plot-pkgproj}
+num_hist <- function (data, binwidth, fill, ylab, xlab) {
+  plot <- ggplot(data, aes(x=num)) +
+    geom_histogram(binwidth = binwidth, fill = fill) +
+    scale_force_origin_continuous2() +
+    xlab(xlab) +
+    ylab(ylab) +
+    theme_simple(8) +
+    theme(plot.margin = unit(c(5,0,0,0), "mm"))
+  if (is.null(ylab)) {
+    plot <- plot + theme(axis.title.y = element_blank())
+  }
+  plot
+}
+```
+
+To get an impression how classes are distributed over packages and projects,
+let's look at the following plot.
+
+```{r per-pkgproj-class-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+num_classes_per_package <- classes_data %>%
+    group_by(package) %>%
+    summarise(
+      num = n(),
+      .groups = "drop")
+num_classes_per_project <- classes_data %>%
+    group_by(project) %>%
+    summarise(
+      num = n(),
+      .groups = "drop")
+
+grid.arrange(
+  num_hist(num_classes_per_package %>% filter(num < 75), 1, "#3465a4", "number of packages", "number of classes"),
+  num_hist(num_classes_per_package %>% filter(num >= 75), 25, "#3465a4", NULL, "number of classes"),
+  num_hist(num_classes_per_project, 25, "#75507b", "number of projects", "number of classes") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 3)
+```
+
+The first two graphs are histograms that show how many packages have a specific number of classes in them.
+We only record something if there's a method, and a method needs a class.
+So, there are no packages without any classes.
+But there are plenty of packages with only 1 class.
+The number of packages that have high number of classes decreases rapidly.
+The second histogram shows all packages that have 75 or more classes,
+and we see there are two packages with around 600 classes: `r str_c((num_classes_per_package %>% filter(num >= 500))$package, collapse = ", ")`.
+
+The third histogram looks at the same data but this time by project.
+A project can consist of multiple packages, but it turns out,
+there are many projects with very few classes, and only very few projects 
+with many classes.
+To make these details better visible, the second and third histogram
+uses a bin size of 25 instead of 1.
+
+When looking at the following plots, we see that the results look a bit different
+for methods.
+
+```{r per-clspkg-method-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+num_methods_per_package <- methods_data %>%
+    group_by(package) %>%
+    summarise(
+      num = n(),
+      .groups = "drop")
+num_methods_per_project <- methods_data %>%
+    group_by(project) %>%
+    summarise(
+      num = n(),
+      .groups = "drop")
+
+grid.arrange(
+  num_hist(num_methods_per_package %>% filter(num < 100), 1, "#3465a4", "number of packages", "number of methods"),
+  num_hist(num_methods_per_package %>% filter(num >= 100), 50, "#3465a4", NULL, "number of methods"),
+  num_hist(num_methods_per_project, 100, "#75507b", "number of projects", "number of methods") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 3)
+```
+
+The first histogram (on the left) shows how many packages have 1, 2, and up to 99 methods
+in them. There seem to be about 15 packages with just a single method in them.
+And about 40 with 2 methods.
+Interestingly, the number of methods per package seems to show fewer
+similarities to the power law or pareto distribution
+than the number of classes.
+
+Looking at the second histogram, which only considers the packages with
+100 or more methods, we see a shape more similar to the power law.
+
+When looking at the data at the granularity of projects, in the third histogram,
+we see many projects with very few methods, and only very few projects with many methods.
+
+In this corpus, the projects Bloc, Glamorous Toolkit, SmaCC, and Spec all have more than 10,000 methods.
+
+<!-- TODO: what's the package per project distribution? -->
+
+## Structure of Classes
+
+Let us assume for the rest of this post that this is a single code base.
+In Pharo, it would feel like a single code base anyway, since everything is in
+the image and can be accessed and modified easily.
+
+```{r per-class-method-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
+num_methods_per_class <- methods_data %>%
+    group_by(class) %>%
+    summarise(
+      num = n(),
+      .groups = "drop")
+grid.arrange(
+  num_hist(num_methods_per_class %>% filter(num < 50), 1, "#3465a4", "number of classes", "number of methods"),
+  num_hist(num_methods_per_class %>% filter(num >= 50), 10, "#3465a4", NULL, "number of methods") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 2)
+```
+
+The two histograms above show the number of classes that have a particular number of methods.
+On the left, we see all class with fewer than 50 methods.
+Turns out, a lot of methods have a single class, and even though there are considerably fewer,
+there are quite a number of classes with 40 to 50 methods.
+In the histogram on the right, with a bin size of 10,
+we see that there are still plenty of classes with 50 to 100 methods,
+after which we then fine fewer and fewer classes.
+Morph, Object, and VBNetParser have each more than 700 methods, and thus,
+have the most methods.
+
+```{r per-class-direct-fields-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
+num_dfields_per_class <- classes_data %>%
+    rename(num = numDirectInstVars)
+grid.arrange(
+  num_hist(num_dfields_per_class %>% filter(num < 15), 1, "#3465a4", "number of classes", "number of direct fields"),
+  num_hist(num_dfields_per_class %>% filter(num >= 15), 1, "#3465a4", NULL, "number of fields") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 2)
+```
+
+The histograms directly above show how many classes have a specific number fields
+that they directly declare. For comparison below, we'll look at the
+total number of fields of a class when also considering all fields of its
+superclass.
+
+For direct fields, we see that may classes do not have any fields, but plenty of them have some
+fields. In the histogram on the right, we see that there quite a number of classes
+with 15 or more fields (`r nrow(num_dfields_per_class %>% filter(num >= 15))` in total).
+The classes with more than 100 methods are PRPillarGrammar, PRPillarGrammarOld,
+PPYAMLGrammar, and FamixGenerator.
+
+```{r per-class-total-fields-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+num_tfields_per_class <- classes_data %>%
+    rename(num = numTotalInstVars)
+grid.arrange(
+  num_hist(num_tfields_per_class %>% filter(num < 30), 1, "#3465a4", "number of classes", "number of all fields"),
+  num_hist(num_tfields_per_class %>% filter(num >= 30), 1, "#3465a4", NULL, "number of all fields") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 2)
+```
+
+When considering all fields, including the ones in the superclass hierarchy,
+things look a little different.
+On the left, we see the number of classes that have fewer than 30 fields.
+Since we now count the classes from the superclass hierarchy,
+we see there's a spike at three fields.
+For classes with 30 or more fields in total, in the histogram on the right,
+we see a few more spikes, but at a smaller level.
+The class with the most fields is `r (num_tfields_per_class %>% filter(num == max(num_tfields_per_class$num)))$class` and
+has `r max(num_tfields_per_class$num)` fields.
+
+
+```{r per-class-fields-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+num_cfields_per_class <- classes_data %>%
+    rename(num = numClassVars)
+grid.arrange(
+  num_hist(num_cfields_per_class, 1, "#3465a4", "number of classes", "number of class fields"),
+  num_hist(num_cfields_per_class %>% filter(num >= 1), 1, "#3465a4", NULL, "number of class fields") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 2)
+```
+
+When it comes to class fields, the situation looks very different.
+Only `r nrow(num_cfields_per_class %>% filter(num == 1))` classes have one class field,
+and only `r nrow(num_cfields_per_class %>% filter(num > 1))` have more than one.
+
+
+```{r per-class-super-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+num_superclasses_per_class <- classes_data %>%
+    rename(num = numSuperclasses)
+grid.arrange(
+  num_hist(num_superclasses_per_class, 1, "#3465a4", "number of classes", "number of superclasses"),
+  num_hist(num_superclasses_per_class %>% filter(num >= 8), 1, "#3465a4", NULL, "number of superclasses") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 2)
+```
+
+Since the number of classes seems strongly influenced by the superclass hierarchy,
+let's have a look at the numbers here.
+
+The data looks a bit strange. We have few classes that have no superclass.
+This is a quirk in Pharo's reflection system.
+These classes are not classic classes but traits.
+The few classes that have a single superclass are bit special,
+and reflect Pharo's metalevel architecture. The most important one is Object.
+It's superclass is Protoobject, where hierarchy terminates.
+The other classes are what can be considered dynamic proxies,
+used for intercepting message sends/method calls.
+
+Only few hierarchies turn out to be deep,
+which includes widgets and some test classes with 11 or 12 superclasses.
+
+## Structure of Methods
+
+After looking at classes, let's investigate the methods a bit closer.
+
+```{r loc-per-methods, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+loc_per_method <- methods_data %>%
+    rename(num = linesOfCode)
+grid.arrange(
+  num_hist(loc_per_method %>% filter(num < 30), 1, "#3465a4", "number of methods", "number of lines"),
+  num_hist(loc_per_method %>% filter(num >= 30 & num < 150), 1, "#3465a4", NULL, "number of lines"),
+  num_hist(loc_per_method %>% filter(num >= 150), 250, "#3465a4", NULL, "number of lines") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 3)
+```
+There's indeed one method of in a mock class that has no code.
+Not sure what's going on there, but the method might simply not be a
+source method. I didn't check.
+Though, there are `r nrow(loc_per_method %>% filter(num == 1))` methods with one
+line of code. First this seemed a little strange, too, but since Pharo
+considers method signatures as part of the method, it's essentially empty methods.
+With this, it's unsurprising that most methods have 2 lines, which includes
+accessors and all kind of other short methods.
+
+If I recall correctly, Smalltalkers advice against methods with more than 6 lines.
+From the data distribution, the advice seems to be widely ignored.
+At least, there doesn't seem to be a major step after 6 lines.
+There are `r nrow(loc_per_method %>% filter(num > 1000))` methods with more 
+than 1000 lines.
+The `r nrow(loc_per_method %>% filter(num >= 5000))` methods with more than 5000
+lines seem to all carry various kind of data, things like JSON and JavaScript
+strings.
+
+```{r loc-per-class, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+loc_per_class <- methods_data %>%
+  group_by(class) %>%
+  summarise(num = sum(linesOfCode),
+            .groups = "drop")
+grid.arrange(
+  num_hist(loc_per_class %>% filter(num < 100), 1, "#3465a4", "number of classes", "number of lines"),
+  num_hist(loc_per_class %>% filter(num >= 100 & num < 1000), 10, "#3465a4", NULL, "number of lines"),
+  num_hist(loc_per_class %>% filter(num >= 1000), 250, "#3465a4", NULL, "number of lines") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 3)
+```
+
+Looking at the lines of code by aggregating them per class reveals a mostly similar picture.
+Many tiny classes, and few large classes.
+
+
+```{r args-per-method, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+args_per_method <- methods_data %>%
+    rename(num = numArgs)
+grid.arrange(
+  num_hist(args_per_method %>% filter(num < 15), 1, "#3465a4", "number of methods", "number of arguments"),
+  num_hist(args_per_method %>% filter(num >= 4), 1, "#3465a4", NULL, "number of arguments"),
+  num_hist(args_per_method %>% filter(num >= 7), 1, "#3465a4", NULL, "number of arguments") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 3)
+```
+
+When looking at the number of arguments a method takes, we see a huge number not taking any at all (the receiver is not considered).
+About half the number has 1 argument, which seems plausible considering setters have
+one argument.
+The two methods with 15 arguments are methods to test the bytecode compiler.
+
+
+```{r locals-per-method, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+locals_per_method <- methods_data %>%
+    rename(num = numLocals)
+grid.arrange(
+  num_hist(locals_per_method %>% filter(num < 15), 1, "#3465a4", "number of methods", "number of locals"),
+  num_hist(locals_per_method %>% filter(num >= 4), 1, "#3465a4", NULL, "number of locals"),
+  num_hist(locals_per_method %>% filter(num >= 10), 1, "#3465a4", NULL, "number of locals") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 3)
+```
+
+A lot of methods don't have any local variables. Probably not surprising
+with given the number of getters and setters why may assume.
+And, it seems people don't actually go all out when it comes to local variables.
+`r max(locals_per_method$num)` seems sufficient for everyone.
+The particular method seems to rotate an elliptical arc.
+
+
+```{r literals-per-method, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+literals_per_method <- methods_data %>%
+    rename(num = numLiterals)
+grid.arrange(
+  num_hist(literals_per_method %>% filter(num < 50), 1, "#3465a4", "number of methods", "number of literals"),
+  num_hist(literals_per_method %>% filter(num >= 50), 1, "#3465a4", NULL, "number of literals") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 3)
+```
+
+Finally, let's have a look at the number of literals per method.
+Literals include any kind of numbers, constants, a construct that have a
+specific syntax in the language, e.g., arrays.
+However, it also includes the names of methods, which are used for the message
+sends. Thus, it somewhat correlates with the number of message sends a
+method may possibly have. Though, that's proberly not a perfect
+correlation because of all kind of optimizations in the bytecode set.
+
+
+## Conclusion
+
+Ok, so, what to do with this data?
+I am not quite sure yet.
+Though, there are a few bits and pieces in here that are interesting.
+And, since I recently started generating large code bases to
+assess the performance of cold code, i.e., interpreter speed,
+I think some of these bits will allow me to generate more "natural" code.
+
+Other details suggest to have a good look at various optimizations classic interpreters do.
+In SOMns, I for instance optimize the accessors to object fields already, and avoid having
+to do a full method/function call for each of them.
+Though, I am not sure that's an optimization applied by many languages.
+On the other hand, HotSpot has them and calls them fast accessor methods.
+
+Beyond that, there's probably more here, but that's for another day.
+
+```{r}
+### Distribution of Method Length
+# fit <- PPS.fit((methods_short %>% filter(linesOfCode > 0))$linesOfCode)
+# plot(fit)
+# pfit <- pareto.fit((methods_short %>% filter(linesOfCode > 0))$linesOfCode)
+#  #sigma is scale, scale is b
+# plot(pfit)
+
+### Attempting to generate Pareto distributed random numbers
+
+# gen_nums <- runif(length(methods_short$linesOfCode))
+# a <- pfit$estimate$lambda
+# b <- pfit$estimate$sigma
+# 
+# inv_fun_denom <- (1 - gen_nums) ^ (1/a)
+# pareto_nums <- (b / inv_fun_denom) - b
+# 
+# pareto_data <- data.frame(linesOfCode = pareto_nums)
+# 
+# ggplot(pareto_data, aes(x=linesOfCode)) +
+#   geom_histogram()
+# 
+# pfit$estimate$lambda
+# pfit$estimate$sigma
+
+```
+
+
+
+## Appendix
+
+The following table contains the details on the projects included in this
+analysis.
+
+| Project     | Commit  | URL |
+|-------------|---------|-----|
+| DrTests     | 010eb9b | https://github.com/juliendelplanque/DrTests |
+| Mustache    | 728feda | https://github.com/noha/mustache |
+| PetitParser | bd108b9 | https://github.com/moosetechnology/PetitParser |
+| Pillar      | 4d8a285 | https://github.com/pillar-markup/pillar        |
+| Seaside     | e0c73a5 | https://github.com/SeasideSt/Seaside |
+| Spec2       | 988c6d7 | https://github.com/pharo-spec/Spec |
+| PolyMath    | 473b0b0 | https://github.com/PolyMathOrg/PolyMath |
+| Telescope   | 8c47cfc | https://github.com/TelescopeSt/TelescopeCytoscape |
+| Voyage      | f4f9d28 | https://github.com/pharo-nosql/voyage |
+| Bloc        | a8c7ecb | https://github.com/pharo-graphics/Bloc |
+| DataFrame   | 7422404 | https://github.com/PolyMathOrg/DataFrame |
+| Roassal2    | d65a87a | https://github.com/ObjectProfile/Roassal2 |
+| Roassal3    | 167de2d | https://github.com/ObjectProfile/Roassal3 |
+| Moose       | fc8fb07 | https://github.com/moosetechnology/Moose |
+| GToolkit    | e3c98fc | https://github.com/feenkcom/gtoolkit |
+| Iceberg     | 7e78a75 | https://github.com/pharo-vcs/iceberg |
+
+After loading these projects into a Pharo 8.0 image,
+the following `r length(levels(factor(methods_data$project)))`
+packages were loaded: `r str_c(levels(factor(methods_data$project)), collapse = ", ")`

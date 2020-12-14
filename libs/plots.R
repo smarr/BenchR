@@ -86,6 +86,14 @@ scale_force_origin_continuous <- function() {
   )
 }
 
+
+scale_force_origin_continuous2 <- function() {
+  list(
+    scale_x_continuous(expand = expansion(mult=0)),
+    scale_y_continuous(expand = expansion(mult=0))
+  )
+}
+
 ##
 ## Theme Settings
 ##

@@ -21,6 +21,7 @@ load_and_install_if_necessary("ggplot2")
 load_and_install_if_necessary("boot")
 load_and_install_if_necessary("ggstance")
 load_and_install_if_necessary("tidyr")
+load_and_install_if_necessary("gridExtra")
 
 load_and_install_if_necessary("ragg")
 load_and_install_if_necessary("svglite")
