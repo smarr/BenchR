@@ -1,8 +1,29 @@
 ---
-title: "The Shape of 1.4M Lines of Code"
-author: "Stefan Marr"
-date: "11/12/2020"
-output: html_document
+#!./shape-of-large-source-code.knit.sh
+title: "The Shape of 1.7M Lines of Code"
+output:
+  html_notebook: default
+date: '2020-12-14 23:14:29 +0000'
+layout: post
+categories:
+  - Research
+tags:
+  - Smalltalk
+  - Pharo
+  - Language Implementation
+  - Research
+  - SOMns
+  - Metrics
+custom_scss: |
+  figure { margin-left: 0; margin-right: 0; }
+  figure img { margin-left: auto; margin-right: auto; display: block; }
+  figure.full img { max-width: 100%; }
+  figure.two-thirds img { max-width: 66%; }
+
+htmlmeta:
+  description: Analysing the shape of 1.7M of Pharo Smalltalk Code
+  keywords: Smalltalk, Pharo, Language Implementation, Research, SOMns, Metrics
+  author: Stefan Marr
 ---
 
 
@@ -95,8 +116,6 @@ which also comes with the code the authors used to answer their questions.
 Though, the report focuses on more high-level questions than what I had in mind.
 With [a bit of extra effort](https://github.com/smarr/SourceCodeDataCollector/tree/extra-data), I managed to collect the data I was looking for.
 
-In the remainder of this post, I'll look at the collected data.
-
 ```{r calc-size, cache=TRUE}
 num_projects <- length(levels(factor(methods_data$project)))
 num_packages <- length(levels(factor(methods_data$package)))
@@ -180,12 +199,15 @@ num_classes_per_project <- classes_data %>%
       num = n(),
       .groups = "drop")
 
+cp("<figure class='full'>")
 grid.arrange(
   num_hist(num_classes_per_package %>% filter(num < 75), 1, "#3465a4", "number of packages", "number of classes"),
   num_hist(num_classes_per_package %>% filter(num >= 75), 25, "#3465a4", NULL, "number of classes"),
   num_hist(num_classes_per_project, 25, "#75507b", "number of projects", "number of classes") +
     theme(plot.margin = unit(c(5,5,0,0), "mm")),
   ncol = 3)
+cp("<figcaption>Number of classes per package and per project.</figcaption>")
+cp("</figure>")
 ```
 
 The first two graphs are histograms that show how many packages have a specific number of classes in them.
@@ -218,12 +240,15 @@ num_methods_per_project <- methods_data %>%
       num = n(),
       .groups = "drop")
 
+cp("<figure class='full'>")
 grid.arrange(
   num_hist(num_methods_per_package %>% filter(num < 100), 1, "#3465a4", "number of packages", "number of methods"),
   num_hist(num_methods_per_package %>% filter(num >= 100), 50, "#3465a4", NULL, "number of methods"),
   num_hist(num_methods_per_project, 100, "#75507b", "number of projects", "number of methods") +
     theme(plot.margin = unit(c(5,5,0,0), "mm")),
   ncol = 3)
+cp("<figcaption>Number of methods per package and per project</figcaption>")
+cp("</figure>")
 ```
 
 The first histogram (on the left) shows how many packages have 1, 2, and up to 99 methods
@@ -255,52 +280,63 @@ num_methods_per_class <- methods_data %>%
     summarise(
       num = n(),
       .groups = "drop")
+
+cp("<figure class='two-thirds'>")
 grid.arrange(
   num_hist(num_methods_per_class %>% filter(num < 50), 1, "#3465a4", "number of classes", "number of methods"),
   num_hist(num_methods_per_class %>% filter(num >= 50), 10, "#3465a4", NULL, "number of methods") +
     theme(plot.margin = unit(c(5,5,0,0), "mm")),
   ncol = 2)
+cp("<figcaption>Number of methods per class.</figcaption>")
+cp("</figure>")
 ```
 
 The two histograms above show the number of classes that have a particular number of methods.
 On the left, we see all class with fewer than 50 methods.
-Turns out, a lot of methods have a single class, and even though there are considerably fewer,
+Turns out, a lot of classes have a single method, and even though there are considerably fewer,
 there are quite a number of classes with 40 to 50 methods.
 In the histogram on the right, with a bin size of 10,
 we see that there are still plenty of classes with 50 to 100 methods,
-after which we then fine fewer and fewer classes.
-Morph, Object, and VBNetParser have each more than 700 methods, and thus,
+after which we then find fewer and fewer classes.
+The classes Morph, Object, and VBNetParser have each more than 700 methods, and thus,
 have the most methods.
 
 ```{r per-class-direct-fields-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
 num_dfields_per_class <- classes_data %>%
     rename(num = numDirectInstVars)
+
+cp("<figure class='two-thirds'>")
 grid.arrange(
   num_hist(num_dfields_per_class %>% filter(num < 15), 1, "#3465a4", "number of classes", "number of direct fields"),
   num_hist(num_dfields_per_class %>% filter(num >= 15), 1, "#3465a4", NULL, "number of fields") +
     theme(plot.margin = unit(c(5,5,0,0), "mm")),
   ncol = 2)
+cp("<figcaption>Number of direct fields in a class.</figcaption>")
+cp("</figure>")
 ```
 
-The histograms directly above show how many classes have a specific number fields
+The histograms above show how many classes have a specific number fields
 that they directly declare. For comparison below, we'll look at the
-total number of fields of a class when also considering all fields of its
-superclass.
+total number of fields of a class, considering all fields of its superclasses.
 
 For direct fields, we see that may classes do not have any fields, but plenty of them have some
-fields. In the histogram on the right, we see that there quite a number of classes
+fields. In the histogram on the right, we see quite a number of classes
 with 15 or more fields (`r nrow(num_dfields_per_class %>% filter(num >= 15))` in total).
 The classes with more than 100 methods are PRPillarGrammar, PRPillarGrammarOld,
 PPYAMLGrammar, and FamixGenerator.
 
-```{r per-class-total-fields-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+```{r per-class-total-fields-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
 num_tfields_per_class <- classes_data %>%
     rename(num = numTotalInstVars)
+
+cp("<figure class='two-thirds'>")
 grid.arrange(
   num_hist(num_tfields_per_class %>% filter(num < 30), 1, "#3465a4", "number of classes", "number of all fields"),
   num_hist(num_tfields_per_class %>% filter(num >= 30), 1, "#3465a4", NULL, "number of all fields") +
     theme(plot.margin = unit(c(5,5,0,0), "mm")),
   ncol = 2)
+cp("<figcaption>Number of all fields in a class including from superclasses.</figcaption>")
+cp("</figure>")
 ```
 
 When considering all fields, including the ones in the superclass hierarchy,
@@ -314,14 +350,18 @@ The class with the most fields is `r (num_tfields_per_class %>% filter(num == ma
 has `r max(num_tfields_per_class$num)` fields.
 
 
-```{r per-class-fields-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+```{r per-class-fields-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
 num_cfields_per_class <- classes_data %>%
     rename(num = numClassVars)
+
+cp("<figure class='two-thirds'>")
 grid.arrange(
   num_hist(num_cfields_per_class, 1, "#3465a4", "number of classes", "number of class fields"),
   num_hist(num_cfields_per_class %>% filter(num >= 1), 1, "#3465a4", NULL, "number of class fields") +
     theme(plot.margin = unit(c(5,5,0,0), "mm")),
   ncol = 2)
+cp("<figcaption>Number of class fields, i.e., static fields per class.</figcaption>")
+cp("</figure>")
 ```
 
 When it comes to class fields, the situation looks very different.
@@ -329,25 +369,29 @@ Only `r nrow(num_cfields_per_class %>% filter(num == 1))` classes have one class
 and only `r nrow(num_cfields_per_class %>% filter(num > 1))` have more than one.
 
 
-```{r per-class-super-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+```{r per-class-super-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
 num_superclasses_per_class <- classes_data %>%
     rename(num = numSuperclasses)
+
+cp("<figure class='two-thirds'>")
 grid.arrange(
   num_hist(num_superclasses_per_class, 1, "#3465a4", "number of classes", "number of superclasses"),
   num_hist(num_superclasses_per_class %>% filter(num >= 8), 1, "#3465a4", NULL, "number of superclasses") +
     theme(plot.margin = unit(c(5,5,0,0), "mm")),
   ncol = 2)
+cp("<figcaption>Number of superclasses per class.</figcaption>")
+cp("</figure>")
 ```
 
-Since the number of classes seems strongly influenced by the superclass hierarchy,
-let's have a look at the numbers here.
+Since the number of fields depends on the superclass hierarchy,
+let's have a look at the numbers for using inheritance.
 
 The data looks a bit strange. We have few classes that have no superclass.
 This is a quirk in Pharo's reflection system.
 These classes are not classic classes but traits.
 The few classes that have a single superclass are bit special,
 and reflect Pharo's metalevel architecture. The most important one is Object.
-It's superclass is Protoobject, where hierarchy terminates.
+Its superclass is ProtoObject, where the hierarchy terminates.
 The other classes are what can be considered dynamic proxies,
 used for intercepting message sends/method calls.
 
@@ -361,14 +405,18 @@ After looking at classes, let's investigate the methods a bit closer.
 ```{r loc-per-methods, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
 loc_per_method <- methods_data %>%
     rename(num = linesOfCode)
+
+cp("<figure class='full'>")
 grid.arrange(
   num_hist(loc_per_method %>% filter(num < 30), 1, "#3465a4", "number of methods", "number of lines"),
   num_hist(loc_per_method %>% filter(num >= 30 & num < 150), 1, "#3465a4", NULL, "number of lines"),
   num_hist(loc_per_method %>% filter(num >= 150), 250, "#3465a4", NULL, "number of lines") +
     theme(plot.margin = unit(c(5,5,0,0), "mm")),
   ncol = 3)
+cp("<figcaption>Lines of code per method.</figcaption>")
+cp("</figure>")
 ```
-There's indeed one method of in a mock class that has no code.
+There's indeed one method in a mock class that has no code.
 Not sure what's going on there, but the method might simply not be a
 source method. I didn't check.
 Though, there are `r nrow(loc_per_method %>% filter(num == 1))` methods with one
@@ -377,12 +425,12 @@ considers method signatures as part of the method, it's essentially empty method
 With this, it's unsurprising that most methods have 2 lines, which includes
 accessors and all kind of other short methods.
 
-If I recall correctly, Smalltalkers advice against methods with more than 6 lines.
+If I recall correctly, Smalltalkers advice against methods with more than 6 or 7 lines.
 From the data distribution, the advice seems to be widely ignored.
-At least, there doesn't seem to be a major step after 6 lines.
+At least, there doesn't seem to be a major step after 6-7 lines.
 There are `r nrow(loc_per_method %>% filter(num > 1000))` methods with more 
-than 1000 lines.
-The `r nrow(loc_per_method %>% filter(num >= 5000))` methods with more than 5000
+than 1,000 lines.
+The `r nrow(loc_per_method %>% filter(num >= 5000))` methods with more than 5,000
 lines seem to all carry various kind of data, things like JSON and JavaScript
 strings.
 
@@ -391,12 +439,16 @@ loc_per_class <- methods_data %>%
   group_by(class) %>%
   summarise(num = sum(linesOfCode),
             .groups = "drop")
+
+cp("<figure class='full'>")
 grid.arrange(
   num_hist(loc_per_class %>% filter(num < 100), 1, "#3465a4", "number of classes", "number of lines"),
   num_hist(loc_per_class %>% filter(num >= 100 & num < 1000), 10, "#3465a4", NULL, "number of lines"),
   num_hist(loc_per_class %>% filter(num >= 1000), 250, "#3465a4", NULL, "number of lines") +
     theme(plot.margin = unit(c(5,5,0,0), "mm")),
   ncol = 3)
+cp("<figcaption>Lines of code per class.</figcaption>")
+cp("</figure>")
 ```
 
 Looking at the lines of code by aggregating them per class reveals a mostly similar picture.
@@ -406,16 +458,20 @@ Many tiny classes, and few large classes.
 ```{r args-per-method, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
 args_per_method <- methods_data %>%
     rename(num = numArgs)
+
+cp("<figure class='full'>")
 grid.arrange(
   num_hist(args_per_method %>% filter(num < 15), 1, "#3465a4", "number of methods", "number of arguments"),
   num_hist(args_per_method %>% filter(num >= 4), 1, "#3465a4", NULL, "number of arguments"),
   num_hist(args_per_method %>% filter(num >= 7), 1, "#3465a4", NULL, "number of arguments") +
     theme(plot.margin = unit(c(5,5,0,0), "mm")),
   ncol = 3)
+cp("<figcaption>Number of arguments per method.</figcaption>")
+cp("</figure>")
 ```
 
 When looking at the number of arguments a method takes, we see a huge number not taking any at all (the receiver is not considered).
-About half the number has 1 argument, which seems plausible considering setters have
+About half of the methods has 1 argument, which seems plausible considering setters have
 one argument.
 The two methods with 15 arguments are methods to test the bytecode compiler.
 
@@ -423,38 +479,48 @@ The two methods with 15 arguments are methods to test the bytecode compiler.
 ```{r locals-per-method, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
 locals_per_method <- methods_data %>%
     rename(num = numLocals)
+
+cp("<figure class='full'>")
 grid.arrange(
   num_hist(locals_per_method %>% filter(num < 15), 1, "#3465a4", "number of methods", "number of locals"),
   num_hist(locals_per_method %>% filter(num >= 4), 1, "#3465a4", NULL, "number of locals"),
   num_hist(locals_per_method %>% filter(num >= 10), 1, "#3465a4", NULL, "number of locals") +
     theme(plot.margin = unit(c(5,5,0,0), "mm")),
   ncol = 3)
+cp("<figcaption>Number of local variables in a method.</figcaption>")
+cp("</figure>")
 ```
 
 A lot of methods don't have any local variables. Probably not surprising
-with given the number of getters and setters why may assume.
+given the number of getters and setters why may assume.
 And, it seems people don't actually go all out when it comes to local variables.
-`r max(locals_per_method$num)` seems sufficient for everyone.
-The particular method seems to rotate an elliptical arc.
+`r max(locals_per_method$num)` variables seem sufficient for everyone,
+and the particular method seems to rotate an elliptical arc,
+thus, implements a somewhat complex algorithm.
 
 
-```{r literals-per-method, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+```{r literals-per-method, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
 literals_per_method <- methods_data %>%
     rename(num = numLiterals)
+
+cp("<figure class='two-thirds'>")
 grid.arrange(
   num_hist(literals_per_method %>% filter(num < 50), 1, "#3465a4", "number of methods", "number of literals"),
   num_hist(literals_per_method %>% filter(num >= 50), 1, "#3465a4", NULL, "number of literals") +
     theme(plot.margin = unit(c(5,5,0,0), "mm")),
-  ncol = 3)
+  ncol = 2)
+cp("<figcaption>Number of literals in a method.</figcaption>")
+cp("</figure>")
 ```
 
 Finally, let's have a look at the number of literals per method.
-Literals include any kind of numbers, constants, a construct that have a
+Literals include any kind of numbers, constants, and constructs that have a
 specific syntax in the language, e.g., arrays.
 However, it also includes the names of methods, which are used for the message
 sends. Thus, it somewhat correlates with the number of message sends a
-method may possibly have. Though, that's proberly not a perfect
-correlation because of all kind of optimizations in the bytecode set.
+method may possibly have. Though, that's probably not a perfect
+correlation because of the other kinds of literals as well as
+all kind of optimizations in the bytecode set.
 
 
 ## Conclusion
@@ -467,12 +533,17 @@ assess the performance of cold code, i.e., interpreter speed,
 I think some of these bits will allow me to generate more "natural" code.
 
 Other details suggest to have a good look at various optimizations classic interpreters do.
-In SOMns, I for instance optimize the accessors to object fields already, and avoid having
-to do a full method/function call for each of them.
-Though, I am not sure that's an optimization applied by many languages.
-On the other hand, HotSpot has them and calls them fast accessor methods.
+For example, SOMns optimizes the accessor methods to object fields already, and thus avoids 
+a full method/function call for them.
+Not sure whether that's an optimization applied by many languages,
+though, HotSpot does it under the term "fast accessor methods".
 
-Beyond that, there's probably more here, but that's for another day.
+Would also be interesting to see how these numbers compare across
+languages. Python and Ruby come to mind as similar class-based dynamic languages.
+
+There might be more to gain from this data, but that's for another day.
+
+For suggestions, comments, or questions, find me on Twitter [@smarr](https://twitter.com/smarr).
 
 ```{r}
 ### Distribution of Method Length
@@ -527,6 +598,8 @@ analysis.
 | GToolkit    | e3c98fc | https://github.com/feenkcom/gtoolkit |
 | Iceberg     | 7e78a75 | https://github.com/pharo-vcs/iceberg |
 
-After loading these projects into a Pharo 8.0 image,
-the following `r length(levels(factor(methods_data$project)))`
-packages were loaded: `r str_c(levels(factor(methods_data$project)), collapse = ", ")`
+```{r}
+# After loading these projects into a Pharo 8.0 image,
+# the following `r length(levels(factor(methods_data$project)))`
+# projects were loaded: `r str_c(levels(factor(methods_data$project)), collapse = ", ")`
+```
