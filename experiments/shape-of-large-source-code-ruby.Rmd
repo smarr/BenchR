@@ -1,0 +1,735 @@
+---
+title: "The Shape of 6M Lines of Ruby"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+date: "2020-12-30 17:47:04 +0000"
+layout: post
+categories: Research
+tags:
+- Smalltalk
+- Pharo
+- Language Implementation
+- Research
+- Ruby
+- Metrics
+custom_scss: |
+  figure { margin-left: 0; margin-right: 0; }
+  figure img { margin-left: auto; margin-right: auto; display: block; }
+  figure.full img { max-width: 100%; }
+  figure.two-thirds img { max-width: 66%; }
+htmlmeta:
+  description: Analysing the shape of 1.7M of Pharo Smalltalk Code
+  keywords: Smalltalk, Pharo, Language Implementation, Research, Ruby, Metrics
+  author: "Stefan Marr"
+---
+
+
+```{r setup, echo=FALSE, include=FALSE, cache=FALSE}
+if (!suppressPackageStartupMessages(library(here, logical.return=TRUE))) {
+  install.packages("here", repos="https://cloud.r-project.org/")
+  library(here)
+}
+source(here("libs", "common.R"), chdir = TRUE)
+
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  dev = "ragg_png",
+  dpi = 192) #  dpi = 192
+
+knitr::knit_hooks$set(
+  plot = function(x, options) {
+    cap  <- options$fig.cap  # figure caption
+    tags <- htmltools::tags
+    as.character(tags$img(src = x, alt = cap))
+  }
+)
+
+# install.packages("ParetoPosStable")
+library(ParetoPosStable)
+
+base_dir <- '/Users/smarr/Projects/Smalltalk-Code-Characteristics/data-2020-12/'
+
+classes_files <- c(
+  './part-2/internal/classes.csv',
+  './part-1/internal/classes.csv'
+)
+
+method_files <- c(
+  './part-2/internal/methods.csv',
+  './part-1/internal/methods.csv'
+)
+
+load_all <- function (file_names) {
+  file_names %>%
+    map(function (file_name) {
+      cat(file_name, " ")
+      read.csv(paste0(base_dir, file_name))
+    }) %>%
+    reduce(rbind)
+}
+
+unify_projects <- function(input_data) {
+  # This makes sure that relate projects are treated as one.
+  # Typically these projects don't use the subpackage notation but for our
+  # purposes are related nontheless.
+  input_data %>%
+    mutate(project = ifelse(str_starts(project, "SmaCC"), "SmaCC", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Petit"), "Petit", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Code"), "Code", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Deprecated"), "Deprecated", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Enlumineur"), "Enlumineur", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Famix"), "Famix", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Metacello"), "Metacello", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Monticello"), "Monticello", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Scripting"), "Scripting", project)) %>%
+    mutate(project = ifelse(str_detect(project, "FFI"), "FFI", project))
+}
+
+# classes_data <- load_all(classes_files) %>%
+#   select(-X) %>%
+#   distinct(class, .keep_all = TRUE)
+# classes_data$isTestClass <- as.logical(classes_data$isTestClass)
+# classes_data <- classes_data %>%
+#   unify_projects()
+
+file_data <- read.csv("/Users/smarr/Projects/Smalltalk-Code-Characteristics/Ruby-data/file.csv")
+file_data$isTest <- as.logical(file_data$isTest)
+
+modules_data <- read.csv("/Users/smarr/Projects/Smalltalk-Code-Characteristics/Ruby-data/modules.csv")
+modules_data$isTest <- as.logical(modules_data$isTest)
+
+classes_data <- read.csv("/Users/smarr/Projects/Smalltalk-Code-Characteristics/Ruby-data/classes.csv")
+classes_data$isTest <- as.logical(classes_data$isTest)
+
+methods_data <- read.csv("/Users/smarr/Projects/Smalltalk-Code-Characteristics/Ruby-data/methods.csv")
+methods_data$isInMethod <- as.logical(methods_data$isInMethod)
+methods_data$isTest <- as.logical(methods_data$isTest)
+
+# %>%
+#   # select(-c(X, id)) %>%
+#   select(-c(filename)) %>%
+#   distinct(class, selector, .keep_all = TRUE)
+# methods_data <- methods_data %>%
+#   unify_projects()
+
+methods_data_pharo <- load_all(method_files) %>%
+  select(-c(X, id, protocol)) %>%
+  distinct(class, selector, .keep_all = TRUE)
+methods_data_pharo$isTestClass <- as.logical(methods_data_pharo$isTestClass)
+methods_data_pharo <- methods_data_pharo %>%
+  unify_projects()
+
+# ruby_lines_cmd <- "find . -name \"*.rb\" -exec cat {} + | wc -l"
+# ruby_lines <- 6030278
+# ruby_loc_cmd <- "cloc ."
+# ruby_loc <- 3924076
+# ruby_comment <- 1218439
+# ruby_blank <- 880719
+```
+
+Following up on [my last blog post](https://stefan-marr.de/2020/12/shape-of-large-source-code/),
+I am going to look at how Ruby is used to get a bit of an impression of whether
+there are major differences between Ruby and Smalltalk in their usage.
+
+Again, I am going to look into the structural aspects of code bases.
+This means, looking at classes, methods, modules, and files.
+
+## Methodology
+
+```{r calc-size, cache=TRUE}
+num_files <- nrow(file_data)
+num_test_files <- nrow(file_data %>% filter(isTest))
+
+num_projects <- length(levels(factor(file_data$project)))
+num_projects_with_methods <- length(levels(factor(methods_data$project)))
+num_total_lines <- sum(file_data$totalLines)
+num_file_loc <- sum(file_data$fileScopeLines)
+num_class_loc <- sum(file_data$classScopeLines)
+num_method_loc <- sum(file_data$methodScopeLines)
+num_module_loc <- sum(file_data$moduleScopeLines)
+num_all_loc <- num_file_loc + num_class_loc + num_method_loc + num_module_loc
+
+
+# note that methods_data and classes_data give slightly different results because
+# of the extension methods. So, the classes_data is better, because
+# it doesn't have unwanted duplication.
+num_classes <- length(levels(factor(classes_data$class)))
+num_test_classes <- length(levels(factor((classes_data %>% filter(isTest == "true"))$class)))
+
+num_classes_pharo <- length(levels(factor(methods_data_pharo$class)))
+
+num_modules <- length(levels(factor(modules_data$module)))
+num_test_modules <- length(levels(factor((modules_data %>% filter(isTest == "true"))$module)))
+
+num_methods <- nrow(methods_data)
+num_methods_pharo <- nrow(methods_data_pharo)
+num_test_methods <- nrow(methods_data %>% filter(isTest))
+```
+
+Not being a Ruby expert, I searched for large Ruby on Rails applications
+that could be of relevance.
+I found 10 that sounded promising: Diaspora, Discourse, Errbit, Fat Free CRM, GitLab, Kandan, Redmine, Refinery CMS, Selfstarted, Spree.
+
+For each, I checked out the git repository (see version detail in appendix),
+and installed the Gems in a local directory.
+Since there's a lot of overlap, I moved all gems into a single directory,
+and only kept the latest version to avoid counting the same,
+or sufficiently similar code multiple times.
+
+With these projects and their dependencies, I had in the end
+10 projects and `r pretty(num_projects - 10)` gems.
+Looking exclusively at the `*.rb` files,
+the analysis considered `r pretty(nrow(file_data))` files,
+with a total of `r pretty(num_total_lines)` lines.
+
+To analyze the code,
+I am building on top of the [parser](https://github.com/whitequark/parser) gem.
+The code to determine the statistics can be found in the
+[ruby-stats](https://github.com/smarr/ruby-stats) project on GitHub.
+
+## Size of the Overall Code Base
+
+Looking at the `r pretty(num_files)` files with their
+overall `r pretty(num_total_lines)` lines,
+the first thing I noticed is that only about `r per(num_all_loc / num_total_lines)`%
+of the lines are code, i.e., they are not empty and are not just comments.
+However, only `r per(num_method_loc / num_total_lines)`% of all lines
+are attributed to some form of method or closure, which seemed unexpected to me.
+
+`r per(num_file_loc / num_total_lines)`% of the code lines are
+simply in the direct body of a file, `r per(num_module_loc / num_total_lines)`%
+are directly in modules, and `r per(num_class_loc / num_total_lines)`%
+are directly in classes.
+And there are `r num_projects - num_projects_with_methods` gems that don't
+define a single method or closure. The examples I looked at looked like
+either meta gems, including others (rspec), gems with JavaScript (babel-source),
+or data (mime-types-data).
+
+In total, there are `r pretty(num_methods)` methods (incl. closures),
+`r pretty(num_classes)` classes, and `r pretty(num_modules)` modules defined in
+all projects.
+
+Of the `r pretty(num_files)` files, `r pretty(num_test_files)` were classified
+as tests, for which I more or less checked whether the file name or path contains a variant of "test" or "spec".
+
+```{r plot-fns}
+num_hist <- function (data, binwidth, fill, ylab, xlab) {
+  plot <- ggplot(data, aes(x=num)) +
+    geom_histogram(binwidth = binwidth, fill = fill) +
+    scale_force_origin_continuous2() +
+    xlab(xlab) +
+    ylab(ylab) +
+    theme_simple(8) +
+    theme(plot.margin = unit(c(5,0,0,0), "mm"))
+  if (is.null(ylab)) {
+    plot <- plot + theme(axis.title.y = element_blank())
+  }
+  plot
+}
+
+num_compare <- function (data, ylab, xlab) {
+  plot <- ggplot(data, aes(y=percent, x=num, fill = lang)) +
+    geom_col(position = position_dodge(), alpha = 0.9) +
+    scale_force_origin_continuous2() +
+    xlab(xlab) +
+    ylab(ylab) +
+    scale_fill_manual(values = c("#fcaf3e", "#3465a4")) +
+    theme_simple(8) +
+    theme(plot.margin = unit(c(5,0,0,0), "mm"))
+  if (is.null(ylab)) {
+    plot <- plot + theme(axis.title.y = element_blank())
+  }
+  plot
+}
+```
+
+To get an impression how files and classes are used by projects,
+let's look at the number of files per project as a histogram:
+
+```{r per-prj-file-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
+num_files_per_project <- file_data %>%
+    group_by(project) %>%
+    summarise(
+      num = n(),
+      .groups = "drop")
+
+cp("<figure class='two-thirds'>")
+grid.arrange(
+  num_hist(num_files_per_project %>% filter(num < 100), 1, "#3465a4", "number of projects", "number of files"),
+  num_hist(num_files_per_project %>% filter(num >= 100), 100, "#3465a4", NULL, "number of files") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 2)
+cp("<figcaption>Number of files per project.</figcaption>")
+cp("</figure>")
+```
+
+The histograms show how many projects have a specific number of files in them.
+There's less than 20 projects with just a single `*.rb` file.
+The largest project is GitLab with more than 9,500 files.
+The next project is Discourse, with about 3,300 files.
+
+
+```{r per-prj-class-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
+num_classes_per_project <- classes_data %>%
+    group_by(project) %>%
+    summarise(
+      num = n(),
+      .groups = "drop")
+
+cp("<figure class='two-thirds'>")
+grid.arrange(
+  num_hist(num_classes_per_project %>% filter(num < 50), 1, "#3465a4", "number of projects", "number of classes"),
+  num_hist(num_classes_per_project %>% filter(num >= 50), 100, "#3465a4", NULL, "number of classes") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 2)
+cp("<figcaption>Number of classes per project.</figcaption>")
+cp("</figure>")
+```
+
+When looking at classes, 
+`r pretty(length(levels(factor(classes_data$project))))` out of `r pretty(num_projects)` projects have at least one.
+In the histogram above, we can see that most of the projects that have classes, have indeed rather few of them.
+Discourse with about 2,000 classes and GitLab with about 3,000 classes again have the most.
+
+
+```{r per-prj-module-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
+num_modules_per_project <- modules_data %>%
+    group_by(project) %>%
+    distinct(module) %>%
+    summarise(
+      num = n(),
+      .groups = "drop")
+
+cp("<figure class='two-thirds'>")
+grid.arrange(
+  num_hist(num_modules_per_project %>% filter(num < 50), 1, "#3465a4", "number of projects", "number of modules"),
+  num_hist(num_modules_per_project %>% filter(num >= 50), 100, "#3465a4", NULL, "number of modules") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 2)
+cp("<figcaption>Number of modules per project.</figcaption>")
+cp("</figure>")
+```
+
+The use of modules seems to be somewhat similar as we can see in the histograms above.
+
+When looking at methods per project,
+we see that the results look a bit different.
+There also seem to be some strange patterns and spikes, especially in the range
+from 1 to 100 methods per project.
+
+```{r per-prj-method-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
+num_methods_per_project <- methods_data %>%
+    group_by(project) %>%
+    summarise(
+      num = n(),
+      .groups = "drop")
+
+cp("<figure class='two-thirds'>")
+grid.arrange(
+  num_hist(num_methods_per_project %>% filter(num < 100), 1, "#3465a4", "number of projects", "number of methods"),
+  num_hist(num_methods_per_project %>% filter(num >= 100), 250, "#3465a4", NULL, "number of methods") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 2)
+cp("<figcaption>Number of methods per project</figcaption>")
+cp("</figure>")
+```
+
+
+
+## Structure of Classes
+
+When looking at the defined classes, we can see in the following histograms
+that there are many classes that have no or very few methods.
+
+```{r per-class-method-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
+num_methods_per_class <- classes_data %>%
+    group_by(project, class) %>%
+    transmute(
+      num = numMethods,
+      lang = "ruby")
+
+cp("<figure class='two-thirds'>")
+grid.arrange(
+  num_hist(num_methods_per_class %>% filter(num < 50), 1, "#3465a4", "number of classes", "number of methods"),
+  num_hist(num_methods_per_class %>% filter(num >= 50), 5, "#3465a4", NULL, "number of methods") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 2)
+cp("<figcaption>Number of methods per class</figcaption>")
+cp("</figure>")
+```
+However, there's also a bunch of classes with more than 200 methods.
+Most of these classes are for Ruby parsers of the different versions of Ruby.
+Others are unit test classes in the Redmine project.
+
+While Ruby and Smalltalk are two very different programming systems,
+the languages have some similarities.
+So, let's see whether classes have a similar number of methods:
+
+```{r per-class-method-nums-compare, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+methods_per_class_hist <- classes_data %>%
+  group_by(numMethods) %>%
+  summarize(
+    num = numMethods[[1]],
+    percent = n() / sum(classes_data$numMethods) * 100,
+    lang = "Ruby",
+    .groups = "drop") %>%
+  select(-c(numMethods))
+
+methods_per_class_hist_pharo <- methods_data_pharo %>%
+  group_by(class) %>%
+  summarise(
+    num = n(),
+    .groups = "drop") %>%
+  group_by(num) %>%
+  summarise(
+    num = num[[1]],
+    percent = n() / nrow(methods_data_pharo) * 100,
+    lang = "Pharo",
+    .groups = "drop")
+
+mpc <- rbind(methods_per_class_hist_pharo, methods_per_class_hist)
+
+cp("<figure class='full'>")
+grid.arrange(
+  # "#3465a4",
+  num_compare(mpc %>% filter(num < 25), "% of classes", "number of methods") +
+    theme(legend.position="none"),
+  num_compare(mpc %>% filter(num >= 25), NULL, "number of methods") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm"),
+          legend.position = c(.8,.8)),
+  ncol = 2,
+  widths = 1:2)
+cp("<figcaption>The percent of classes with a given number of methods.</figcaption>")
+cp("</figure>")
+```
+
+The above plot is similar to our histograms before.
+But instead of showing the number of classes, it shows the percent of classes
+with a specific number of methods.
+By normalizing the values, we can more easily compare between the two corpora.
+Just to make the semantics of the plot clear: the length of all bars together
+add up to 100% for Ruby and Pharo separately.
+
+One artifact of how the data is collected, 
+is that Pharo does not show any classes without methods,
+because I collected it per method,
+and didn't get details for classes separately.
+
+The major difference we can see is that Ruby has many more classes
+with only one or two methods. 
+On the other hand, it seems to have a little fewer larger classes,
+but then ends up having also a few really large classes.
+As mentioned previously, the really large classes grouping around
+430-ish methods are all variants of Ruby parsers.
+I'd assume there to be a large amount of code duplication between those classes.
+
+```{r per-class-direct-fields-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
+num_dfields_per_class <- classes_data %>%
+    rename(num = numDirectInstVars)
+
+cp("<figure class='two-thirds'>")
+grid.arrange(
+  num_hist(num_dfields_per_class %>% filter(num < 15), 1, "#3465a4", "number of classes", "number of direct fields"),
+  num_hist(num_dfields_per_class %>% filter(num >= 15), 1, "#3465a4", NULL, "number of fields") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 2)
+cp("<figcaption>Number of direct fields in a class.</figcaption>")
+cp("</figure>")
+```
+
+The histograms above show how many classes have a specific number of fields
+that they access directly, for instance, with expressions like `@count`.
+
+We can see that an overwhelming number of classes do not access fields at all,
+which seems a bit surprising to me.
+Though, there also seem to be a number of classes that have many fields.
+The two largest classes have 180 (RBPDF) and 52 distinct fields (csv.Parser).
+
+I'll refrain from a direct comparison with Pharo here, because it's not really
+clear to me how to do this in a comparable way.
+The only way that would seem somewhat comparable would be to build the
+inheritance hierarchy, and resolve mixins, but so far, I haven't implemented either.
+
+
+```{r per-class-fields-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
+num_cfields_per_class <- classes_data %>%
+    rename(num = numClassVars)
+
+cp("<figure class='two-thirds'>")
+grid.arrange(
+  num_hist(num_cfields_per_class, 1, "#3465a4", "number of classes", "number of class fields"),
+  num_hist(num_cfields_per_class %>% filter(num >= 1), 1, "#3465a4", NULL, "number of class fields") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 2)
+cp("<figcaption>Number of class fields, i.e., static fields per class.</figcaption>")
+cp("</figure>")
+```
+
+However, we can look at the use of class variables with the double-at syntax: `@@count`.
+Here, the situation looks very different.
+Only `r nrow(num_cfields_per_class %>% filter(num == 1))` classes have one class field,
+and only `r nrow(num_cfields_per_class %>% filter(num > 1))` have more than one.
+This means, `r pretty(nrow(num_cfields_per_class %>% filter(num == 0)))` classes
+don't use class fields at all.
+
+## Structure of Methods
+
+After looking at classes, let's investigate the methods a bit closer.
+
+```{r loc-per-methods, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+loc_per_method <- methods_data %>%
+    rename(num = linesOfCode)
+
+cp("<figure class='full'>")
+grid.arrange(
+  num_hist(loc_per_method %>% filter(num < 30), 1, "#3465a4", "number of methods", "lines of code"),
+  num_hist(loc_per_method %>% filter(num >= 30 & num < 250), 1, "#3465a4", NULL, "lines of code"),
+  num_hist(loc_per_method %>% filter(num >= 250), 250, "#3465a4", NULL, "number of lines") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 3)
+cp("<figcaption>Lines of code per method.</figcaption>")
+cp("</figure>")
+```
+
+Let's first look at the lines of code per method.
+This means, at how many non-empty lines there are that do not only contain comments.
+
+There don't seem to be any empty methods, but there are almost an equal number
+of methods with 1 (`r pretty(nrow(loc_per_method %>% filter(num == 1)))`) or
+2 lines of code (`r pretty(nrow(loc_per_method %>% filter(num == 2)))`).
+
+The largest method in the corpus is `parser.Lexer.advance`. I suppose, unsurprisingly
+that's the Ruby parser again with 8,888 lines of code.
+It also has 55 local variables.
+
+The other methods with over 3,000 lines of code are actually blocks in specs.
+There's 5 of them in the mongoid gem, one in grape, and one in Discourse.
+
+```{r lines-per-methods, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+loc_per_method <- methods_data %>%
+    rename(num = lines)
+
+cp("<figure class='full'>")
+grid.arrange(
+  num_hist(loc_per_method %>% filter(num < 30), 1, "#3465a4", "number of methods", "number of lines"),
+  num_hist(loc_per_method %>% filter(num >= 30 & num < 250), 1, "#3465a4", NULL, "number of lines"),
+  num_hist(loc_per_method %>% filter(num >= 250), 250, "#3465a4", NULL, "number of lines") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 3)
+cp("<figcaption>Number of lines per method (incl. blank lines and comments).</figcaption>")
+cp("</figure>")
+```
+When looking at the data for method length in lines,
+which also counts blank lines and comments, the results seem a bit wonky.
+From the previous results, I would expect that there are no empty methods,
+which indeed is the case.
+
+Then we got `r pretty(nrow(loc_per_method %>% filter(num == 1)))` methods with
+just one line, which seems in line with expectations.
+However, we got `r pretty(nrow(loc_per_method %>% filter(num == 2)))`
+methods with two lines, and `r pretty(nrow(loc_per_method %>% filter(num == 3)))`
+methods with three lines, which seems a little odd.
+Perhaps there is some code formatting convention at play.
+
+The rest looks reasonably similar to the lines of code results.
+The huge methods are again the parser this time with 12,619 lines, and the spec blocks.
+
+Comparing to Pharo is a little bit of an issue, because neither the line count
+nor the lines of code metric match what Pharo gives me.
+Pharo reports the number of non-empty lines, including comments.
+So, Pharo's metric is somewhere between the lines and lines of code I got
+here for Ruby.
+
+
+```{r loc-per-methods-compare, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+lines_per_m_ruby <- methods_data %>%
+  group_by(lines) %>%
+  summarize(
+    num = lines[[1]],
+    percent = n() / nrow(methods_data) * 100,
+    lang = "Ruby (lines)",
+    .groups = "drop") %>%
+  select(-c(lines))
+
+loc_per_m_ruby <- methods_data %>%
+  group_by(linesOfCode) %>%
+  summarize(
+    num = linesOfCode[[1]],
+    percent = n() / nrow(methods_data) * 100,
+    lang = "Ruby (LOC)",
+    .groups = "drop") %>%
+  select(-c(linesOfCode))
+
+loc_per_m_pharo <- methods_data_pharo %>%
+  group_by(linesOfCode) %>%
+  summarize(
+    num = linesOfCode[[1]],
+    percent = n() / nrow(methods_data_pharo) * 100,
+    lang = "Pharo",
+    .groups = "drop") %>%
+  select(-c(linesOfCode))
+
+lpm <- rbind(lines_per_m_ruby, loc_per_m_ruby, loc_per_m_pharo)
+
+
+num_compare_point <- function (data, ylab, xlab) {
+  plot <- ggplot(data, aes(y=percent, x=num, fill = lang, color = lang)) +
+    geom_point(alpha = 0.7, size = 0.7) +
+    # geom_col(position = position_dodge()) +
+    scale_force_origin_continuous2() +
+    scale_color_manual(values = c("#fcaf3e", "#3465a4", "#ad7fa8")) +
+    xlab(xlab) +
+    ylab(ylab) +
+    theme_simple(8) +
+    theme(plot.margin = unit(c(5,0,0,0), "mm"))
+  if (is.null(ylab)) {
+    plot <- plot + theme(axis.title.y = element_blank())
+  }
+  plot
+}
+
+cp("<figure class='full'>")
+grid.arrange(
+  num_compare_point(lpm %>% filter(num < 30), "% of methods", "lines or LOC") +
+    theme(legend.position = "none"),
+  num_compare_point(lpm %>% filter(num >= 30 & num < 250), NULL, "lines or LOC")  +
+    theme(legend.position = "none"),
+  num_compare_point(lpm %>% filter(num >= 250), NULL, "lines or LOC") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm"),
+          legend.position = c(0.8,0.8)),
+  ncol = 3)
+cp("<figcaption>Percentage of methods with a specific length in lines or LOC.</figcaption>")
+cp("</figure>")
+```
+
+While the metrics are not identical, having both the lines and lines of code
+for Ruby lets us draw at least one conclusion from the comparison.
+There seems to be a tendency for longer methods in Ruby.
+At least in the range from 30 to 250 lines, there seem to be more methods
+with this size in Ruby.
+
+
+```{r args-per-method, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+args_per_method <- methods_data %>%
+  group_by(numArgs) %>%
+  summarize(
+    num = numArgs[[1]],
+    percent = n() / nrow(methods_data) * 100,
+    lang = "Ruby",
+    .groups = "drop")
+args_per_method_pharo <- methods_data_pharo %>%
+  group_by(numArgs) %>%
+  summarize(
+    num = numArgs[[1]],
+    percent = n() / nrow(methods_data_pharo) * 100,
+    lang = "Pharo",
+    .groups = "drop")
+
+apm <- rbind(args_per_method, args_per_method_pharo)
+
+cp("<figure class='full'>")
+grid.arrange(
+  num_compare(apm %>% filter(num < 15), "% of methods", "number of arguments") +
+    theme(legend.position = "none"),
+  num_compare(apm %>% filter(num >= 4), NULL, "number of arguments") +
+    theme(legend.position = "none"),
+  num_compare(apm %>% filter(num >= 7), NULL, "number of arguments") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm"),
+          legend.position = c(.8,.8)),
+  ncol = 3)
+cp("<figcaption>Percent of methods with a specific number of arguments.</figcaption>")
+cp("</figure>")
+```
+
+When it comes to arguments, Ruby seems to have a few methods/blocks/lambdas without any argument.
+But a bit few with one argument. When it comes to methods/blocks/lambdas with many arguments,
+Pharo seems to have a few more of those.
+Though, the numbers here are not entirely comparable, because the Pharo numbers
+do not actually include blocks/closures.
+
+The Ruby methods with the largest number of arguments (16 and 17) are `RBPDF.Text` and `RBPDF.Image`.
+
+
+```{r locals-per-method, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
+locals_per_method <- methods_data %>%
+  group_by(numLocals) %>%
+  summarize(
+    num = numLocals[[1]],
+    percent = n() / nrow(methods_data) * 100,
+    lang = "Ruby",
+    .groups = "drop")
+locals_per_method_pharo <- methods_data_pharo %>%
+  group_by(numLocals) %>%
+  summarize(
+    num = numLocals[[1]],
+    percent = n() / nrow(methods_data_pharo) * 100,
+    lang = "Pharo",
+    .groups = "drop")
+
+lpm <- rbind(locals_per_method, locals_per_method_pharo)
+
+cp("<figure class='two-thirds'>")
+grid.arrange(
+  num_compare(lpm %>% filter(num < 15), "% of methods", "number of locals") +
+    theme(legend.position = "none"),
+  num_compare(lpm %>% filter(num >= 15 & num < 100), NULL, "number of locals") + #,
+  #num_compare(lpm %>% filter(num >= 100), NULL, "number of locals") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm"),
+          legend.position = c(.8,.8)),
+  ncol = 2)
+cp("<figcaption>Percent of methods with a specific number of local variables.</figcaption>")
+cp("</figure>")
+```
+
+In both languages, a lot of methods don't have any local variables.
+However, in the Ruby corpus there are three methods with more than 50 local variables.
+That is the very long `Lexer.advance` method in the Ruby parser, a Markdown code processing method,
+and `RBPDF`'s `writeHTML` method.
+
+
+## Conclusion
+
+For me, the main take away from this exercise is that when it comes to
+structural metrics, there are visible differences between Ruby and Pharo code.
+This isn't surprising, since they are different languages, with different features,
+communities, and style guides.
+
+However, there also seem to be similarities that are worth noting.
+Overall, number of methods in a class seems to be fairly similar.
+And while Ruby methods might have a small tendency of being larger when they are large,
+the majority of methods isn't actually large and here both languages seem
+to show fairly similar method sizes.
+
+The difference in the usage of arguments may or may not be explainable with
+syntax, such as implicit block arguments, or that I didn't actually consider
+closures in Pharo.
+The use of local variables however, seems to be fairly similar between both languages.
+
+Not sure there are any big lessons to be learned yet, but one could probably 
+go further and study other metrics to gain additional insights.
+I'd probably start with class hierarchy, mixins, and other features that require
+either a bit of dynamic evaluation, or implementing the Ruby semantics in
+the tool determining the metrics.
+
+For suggestions, comments, or questions, find me on Twitter [@smarr](https://twitter.com/smarr).
+
+## Appendix
+
+The following table contains the details on the projects included in this
+analysis.
+
+| Project      | Commit  | URL |
+|--------------|---------|-----|
+| Diaspora     | d2acad1 | https://github.com/diaspora/diaspora |
+| Discourse    | f040b5d | https://github.com/discourse/discourse |
+| Errbit       | cf792c0 | https://github.com/errbit/errbit |
+| Fat Free CRM | 4e72e0c | https://github.com/fatfreecrm/fat_free_crm |
+| GitLab       | 21e08b6 | https://github.com/gitlabhq/gitlabhq |
+| Kandan       | 380efaf | https://github.com/kandanapp/kandan |
+| Redmine      | 988a36b | https://github.com/edavis10/redmine |
+| Refinery CMS | 1b73e0b | https://github.com/refinery/refinerycms |
+| Selfstarted  | 740075f | https://github.com/apigy/selfstarter |
+| Spree        | 901cb64 | https://github.com/spree/spree |

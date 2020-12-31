@@ -82,6 +82,7 @@ pro <- function(val) {
   }
   return(round(val * 100))
 }
+per <- pro
 
 pretty <- function(val) {
   prettyNum(val, big.mark=",")
