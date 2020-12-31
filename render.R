@@ -5,6 +5,7 @@ output_file <- args[2]
 output_dir  <- args[3]
 
 if (endsWith(output_file, ".md")) {
+  cat(paste0("Plain Knitr Rendering of ", input_file, " to ", output_dir, '/', output_file))
   library(knitr)
   knit(input_file, paste0(output_dir, '/', output_file))
 } else {
