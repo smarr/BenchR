@@ -1,0 +1,601 @@
+---
+#!./large-source-code-probability-distributions.knit.sh
+title: "Probability Distributions for Source Code Constructs"
+output:
+  html_notebook: default
+date: '2020-12-?? ??:??:29 +0000'
+layout: post
+categories:
+  - Research
+tags:
+  - Smalltalk
+  - Pharo
+  - Language Implementation
+  - Research
+  - SOMns
+  - Metrics
+custom_scss: |
+  figure { margin-left: 0; margin-right: 0; }
+  figure img { margin-left: auto; margin-right: auto; display: block; }
+  figure.full img { max-width: 100%; }
+  figure.two-thirds img { max-width: 66%; }
+
+htmlmeta:
+  description: Analysing the shape of 1.7M of Pharo Smalltalk Code
+  keywords: Smalltalk, Pharo, Language Implementation, Research, SOMns, Metrics
+  author: Stefan Marr
+---
+
+
+```{r setup, echo=FALSE, include=FALSE, cache=FALSE}
+if (!suppressPackageStartupMessages(library(here, logical.return=TRUE))) {
+  install.packages("here", repos="https://cloud.r-project.org/")
+  library(here)
+}
+source(here("libs", "common.R"), chdir = TRUE)
+
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  dev = "ragg_png",
+  dpi = 192) #  dpi = 192
+
+knitr::knit_hooks$set(
+  plot = function(x, options) {
+    cap  <- options$fig.cap  # figure caption
+    tags <- htmltools::tags
+    as.character(tags$img(src = x, alt = cap))
+  }
+)
+
+# install.packages("ParetoPosStable")
+library(ParetoPosStable)
+
+base_dir <- '/Users/smarr/Projects/Smalltalk-Code-Characteristics/data-2020-12/'
+
+classes_files <- c(
+  './part-2/internal/classes.csv',
+  './part-1/internal/classes.csv'
+)
+
+method_files <- c(
+  './part-2/internal/methods.csv',
+  './part-1/internal/methods.csv'
+)
+
+load_all <- function (file_names) {
+  file_names %>%
+    map(function (file_name) {
+      cat(file_name, " ")
+      read.csv(paste0(base_dir, file_name))
+    }) %>%
+    reduce(rbind)
+}
+
+unify_projects <- function(input_data) {
+  # This makes sure that relate projects are treated as one.
+  # Typically these projects don't use the subpackage notation but for our
+  # purposes are related nontheless.
+  input_data %>%
+    mutate(project = ifelse(str_starts(project, "SmaCC"), "SmaCC", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Petit"), "Petit", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Code"), "Code", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Deprecated"), "Deprecated", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Enlumineur"), "Enlumineur", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Famix"), "Famix", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Metacello"), "Metacello", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Monticello"), "Monticello", project)) %>%
+    mutate(project = ifelse(str_starts(project, "Scripting"), "Scripting", project)) %>%
+    mutate(project = ifelse(str_detect(project, "FFI"), "FFI", project))
+}
+
+classes_data <- load_all(classes_files) %>%
+  select(-X) %>%
+  distinct(class, .keep_all = TRUE)
+classes_data$isTestClass <- as.logical(classes_data$isTestClass)
+classes_data <- classes_data %>%
+  unify_projects()
+
+methods_data <- load_all(method_files) %>%
+  select(-c(X, id)) %>%
+  distinct(class, selector, .keep_all = TRUE)
+methods_data$isTestClass <- as.logical(methods_data$isTestClass)
+methods_data <- methods_data %>%
+  unify_projects()
+
+methods_data_ruby <- read.csv("/Users/smarr/Projects/Smalltalk-Code-Characteristics/Ruby-data/methods.csv")
+```
+
+
+```{r plot-pkgproj}
+num_hist <- function (data, binwidth, fill, ylab, xlab) {
+  plot <- ggplot(data, aes(x=num)) +
+    geom_histogram(binwidth = binwidth, fill = fill) +
+    scale_force_origin_continuous2() +
+    xlab(xlab) +
+    ylab(ylab) +
+    theme_simple(8) +
+    theme(plot.margin = unit(c(5,0,0,0), "mm"))
+  if (is.null(ylab)) {
+    plot <- plot + theme(axis.title.y = element_blank())
+  }
+  plot
+}
+```
+
+## Structure of Classes
+
+```{r per-class-method-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
+num_methods_per_class <- methods_data %>%
+    group_by(class) %>%
+    summarise(
+      num = n(),
+      .groups = "drop")
+
+cp("<figure class='two-thirds'>")
+grid.arrange(
+  num_hist(num_methods_per_class %>% filter(num < 50), 1, "#3465a4", "number of classes", "number of methods"),
+  num_hist(num_methods_per_class %>% filter(num >= 50), 10, "#3465a4", NULL, "number of methods") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 2)
+cp("<figcaption>Number of methods per class.</figcaption>")
+cp("</figure>")
+```
+
+
+```{r per-class-direct-fields-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
+num_dfields_per_class <- classes_data %>%
+    rename(num = numDirectInstVars)
+
+cp("<figure class='two-thirds'>")
+grid.arrange(
+  num_hist(num_dfields_per_class %>% filter(num < 15), 1, "#3465a4", "number of classes", "number of direct fields"),
+  num_hist(num_dfields_per_class %>% filter(num >= 15), 1, "#3465a4", NULL, "number of fields") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 2)
+cp("<figcaption>Number of direct fields in a class.</figcaption>")
+cp("</figure>")
+```
+
+```{r per-class-total-fields-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
+num_tfields_per_class <- classes_data %>%
+    rename(num = numTotalInstVars)
+
+cp("<figure class='two-thirds'>")
+grid.arrange(
+  num_hist(num_tfields_per_class %>% filter(num < 30), 1, "#3465a4", "number of classes", "number of all fields"),
+  num_hist(num_tfields_per_class %>% filter(num >= 30), 1, "#3465a4", NULL, "number of all fields") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 2)
+cp("<figcaption>Number of all fields in a class including from superclasses.</figcaption>")
+cp("</figure>")
+```
+
+
+
+```{r per-class-fields-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
+num_cfields_per_class <- classes_data %>%
+    rename(num = numClassVars)
+
+cp("<figure class='two-thirds'>")
+grid.arrange(
+  num_hist(num_cfields_per_class, 1, "#3465a4", "number of classes", "number of class fields"),
+  num_hist(num_cfields_per_class %>% filter(num >= 1), 1, "#3465a4", NULL, "number of class fields") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 2)
+cp("<figcaption>Number of class fields, i.e., static fields per class.</figcaption>")
+cp("</figure>")
+```
+
+
+
+```{r per-class-super-nums, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
+num_superclasses_per_class <- classes_data %>%
+    rename(num = numSuperclasses)
+
+cp("<figure class='two-thirds'>")
+grid.arrange(
+  num_hist(num_superclasses_per_class, 1, "#3465a4", "number of classes", "number of superclasses"),
+  num_hist(num_superclasses_per_class %>% filter(num >= 8), 1, "#3465a4", NULL, "number of superclasses") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 2)
+cp("<figcaption>Number of superclasses per class.</figcaption>")
+cp("</figure>")
+```
+
+
+## Structure of Methods
+
+### Pharo Non-empty Lines
+
+```{r loc-per-methods, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+loc_per_method <- methods_data %>%
+    rename(num = linesOfCode)
+
+cp("<figure class='full'>")
+grid.arrange(
+  num_hist(loc_per_method %>% filter(num < 30), 1, "#3465a4", "number of methods", "number of lines"),
+  num_hist(loc_per_method %>% filter(num >= 30 & num < 150), 1, "#3465a4", NULL, "number of lines"),
+  num_hist(loc_per_method %>% filter(num >= 150), 250, "#3465a4", NULL, "number of lines") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 3)
+cp("<figcaption>Lines of code per method.</figcaption>")
+cp("</figure>")
+```
+
+### Ruby Non-empty non-comment lines
+
+```{r loc-per-methods, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+loc_per_method <- methods_data_ruby %>%
+    rename(num = linesOfCode)
+
+cp("<figure class='full'>")
+grid.arrange(
+  num_hist(loc_per_method %>% filter(num < 30), 1, "#3465a4", "number of methods", "lines of code"),
+  num_hist(loc_per_method %>% filter(num >= 30 & num < 250), 1, "#3465a4", NULL, "lines of code"),
+  num_hist(loc_per_method %>% filter(num >= 250), 250, "#3465a4", NULL, "number of lines") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 3)
+cp("<figcaption>Lines of code per method.</figcaption>")
+cp("</figure>")
+```
+
+### Ruby lines
+
+```{r lines-per-methods, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+loc_per_method <- methods_data_ruby %>%
+    rename(num = lines)
+
+cp("<figure class='full'>")
+grid.arrange(
+  num_hist(loc_per_method %>% filter(num < 30), 1, "#3465a4", "number of methods", "number of lines"),
+  num_hist(loc_per_method %>% filter(num >= 30 & num < 250), 1, "#3465a4", NULL, "number of lines"),
+  num_hist(loc_per_method %>% filter(num >= 250), 250, "#3465a4", NULL, "number of lines") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 3)
+cp("<figcaption>Number of lines per method (incl. blank lines and comments).</figcaption>")
+cp("</figure>")
+```
+
+
+### Determining the Cumulative Distribution Function
+
+
+
+```{r}
+loc_total <- methods_data$linesOfCode
+loc_freq <- as.data.frame(
+  table(methods_data$linesOfCode))
+
+loc_cumulative <- loc_freq
+loc_cumulative$Freq <- cumsum(loc_cumulative$Freq)
+loc_cumulative <- loc_cumulative %>%
+  rename(loc = Var1,
+         cum_freq = Freq)
+loc_cumulative$loc <- as.numeric(levels(loc_cumulative$loc))[loc_cumulative$loc]
+
+# sum(loc_freq$Freq)
+# max(loc_cumulative$cum_freq)
+
+# this is the cumulative density function between 0 and 1
+loc_cumulative$cum_freq_p <- loc_cumulative$cum_freq / max(loc_cumulative$cum_freq)
+
+ggplot(loc_cumulative %>%
+         filter(loc > 1 & loc < 100),
+       aes(x = loc, y = cum_freq)) +
+  geom_point() +
+  scale_y_log10() +
+  scale_x_log10() +
+  theme_simple(8) +
+  xlab("lines of code") +
+  ylab("cummulative number of methods") +
+  theme(plot.margin = unit(c(5,0,0,0), "mm"))
+
+ggplot(loc_cumulative %>%
+         filter(loc > 1 & loc < 100),
+       aes(x = loc, y = cum_freq_p)) +
+  geom_point() +
+  scale_y_log10() +
+  scale_x_log10() +
+  theme_simple(8) +
+  xlab("lines of code") +
+  ylab("cummulative number of methods") +
+  theme(plot.margin = unit(c(5,0,0,0), "mm"))
+
+```
+```{r}
+my_fitted_fn <- function(loc) {
+  # log(log(log(x + 1) + 1)) * 1 + 0
+  
+  a <- 0.515401
+  b <- 0.801063
+  c <- 0.930317
+  d <- 4.69792
+  e <- -1.38779
+  f <- 0.947122
+  x <- 0.515424
+  y <- 0.863232
+  
+  a * log(b * log(c * log(loc + d) + e)+ f) * x + y
+}
+my_fitted_fn2 <- function(x) {
+  # (1.93926 / (0.505825 + exp(-0.201356 *(x + 14.1355)))) * 1.93926 + -6.44029
+  x^(1/40)
+}
+my_fitted_fn3 <- function(x) {
+  (1.26874 / (0.760971 + exp(-0.194293 *(x + 33.747)))) * 253.043 + -420.897
+}
+
+fitted <- my_fitted_fn(loc_cumulative$loc)
+fitted2 <- my_fitted_fn2(loc_cumulative$loc)
+fitted3 <- my_fitted_fn3(loc_cumulative$loc)
+loc_cumulative$fitted <- fitted
+loc_cumulative$fitted2 <- fitted2
+loc_cumulative$fitted3 <- fitted3
+
+df <- loc_cumulative %>%
+    filter(loc > 1 & loc < 100)
+ggplot(df, aes(x = loc)) +
+  geom_point(aes(y = cum_freq_p, size = 1.1), color="blue") +
+  geom_point(aes(y = fitted, size = 1.1), color="orange") +
+  geom_point(aes(y = fitted2, size = 1.3), color="#ffd300") +
+  geom_point(aes(y = fitted3, size = 1.2), color="lightcoral") +
+  # scale_y_log10() + scale_x_log10() +
+  ylab("cummulative number of methods") + xlab("lines of code") + theme_simple(8) + theme(plot.margin = unit(c(5,0,0,0), "mm"))
+
+
+
+```
+
+```{r}
+library(minpack.lm)
+
+start <- list(a = 1, b = 1, c=-0.2, d=20, e=1, f=0)
+model <- nlsLM(cum_freq_p ~ (a / (b + exp(c *(loc + d)))) * e + f, data=df, start=start, trace=TRUE,
+             control=nls.control(
+               # minFactor = 1/(1024 * 1024 * 1024),
+               maxiter = 1000))
+
+
+start <- list(a = 1, b = 1, c=1, d=1, e=1, f=0, x=1, y=0)
+model <- nlsLM(cum_freq_p ~ (a * log(b * log(c * log(loc + d) + e)+ f)) * x + y, data=df, start=start, trace=TRUE,
+             control=nls.control(
+               # minFactor = 1/(1024 * 1024 * 1024),
+               maxiter = 1000))
+
+```
+
+```{r}
+a <- 1.26874
+b <- 0.760971
+c <- -0.194293
+d <- 33.747
+e <- 253.043
+f <- -420.897
+inverse_fitted <- function(u) {
+  (log(-(a*e / (f - u)) - b) + c * d) / c
+}
+
+random_data <- runif(length(methods_data$linesOfCode))
+loc_data <- sapply(random_data, inverse_fitted)
+ggplot(data.frame(num = loc_data),
+       aes(x = num)) +
+  geom_histogram()
+sum(loc_data)
+
+```
+
+
+```{r args-per-method, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+args_per_method <- methods_data %>%
+    rename(num = numArgs)
+
+cp("<figure class='full'>")
+grid.arrange(
+  num_hist(args_per_method %>% filter(num < 15), 1, "#3465a4", "number of methods", "number of arguments"),
+  num_hist(args_per_method %>% filter(num >= 4), 1, "#3465a4", NULL, "number of arguments"),
+  num_hist(args_per_method %>% filter(num >= 7), 1, "#3465a4", NULL, "number of arguments") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 3)
+cp("<figcaption>Number of arguments per method.</figcaption>")
+cp("</figure>")
+```
+
+
+
+```{r locals-per-method, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
+locals_per_method <- methods_data %>%
+    rename(num = numLocals)
+
+cp("<figure class='full'>")
+grid.arrange(
+  num_hist(locals_per_method %>% filter(num < 15), 1, "#3465a4", "number of methods", "number of locals"),
+  num_hist(locals_per_method %>% filter(num >= 4), 1, "#3465a4", NULL, "number of locals"),
+  num_hist(locals_per_method %>% filter(num >= 10), 1, "#3465a4", NULL, "number of locals") +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 3)
+cp("<figcaption>Number of local variables in a method.</figcaption>")
+cp("</figure>")
+```
+
+
+
+```{r}
+### Distribution of Method Length
+# fit <- PPS.fit((methods_short %>% filter(linesOfCode > 0))$linesOfCode)
+# plot(fit)
+
+pfit <- pareto.fit((methods_data %>% filter(linesOfCode > 0))$linesOfCode)
+#  #sigma is scale, scale is b
+plot(pfit)
+
+### Attempting to generate Pareto distributed random numbers
+
+# gen_nums <- runif(length(methods_short$linesOfCode))
+# a <- pfit$estimate$lambda
+# b <- pfit$estimate$sigma
+# 
+# inv_fun_denom <- (1 - gen_nums) ^ (1/a)
+# pareto_nums <- (b / inv_fun_denom) - b
+# 
+# pareto_data <- data.frame(linesOfCode = pareto_nums)
+# 
+# ggplot(pareto_data, aes(x=linesOfCode)) +
+#   geom_histogram()
+# 
+# pfit$estimate$lambda
+# pfit$estimate$sigma
+
+```
+
+
+
+
+```{r}
+
+bins <- seq(0, max(loc))
+# bins <- 0:31
+loc <- methods_data$linesOfCode
+bins_data <- sapply(bins, function(i) {
+  length(loc[loc == i])
+})
+
+df <- data.frame(bins = bins, num = bins_data) %>%
+  filter(num > 0)
+ggplot(df, aes(x = bins, y = num)) +
+  geom_point() +
+  scale_y_log10() +
+  scale_x_log10() +
+  theme_simple(8) +
+  ylab("number of methods") +
+  xlab("lines of code") +
+  theme(plot.margin = unit(c(5,0,0,0), "mm"))
+
+
+my_fitted_fn <- function(x) {
+  -0.00003818 * exp(3.63181043 * x)
+}
+
+```
+```{r}
+my_fitted_fn <- function(x) {
+  #1000000 * exp(x / -5) / x^3
+  #500000 / x^2 * exp(-x/27)
+  # 800000 / x^2.5 * exp(-x/30)
+  #773905.529245 / x^2.7 * exp(-x/100)
+  #94338.9316 / x^0.6343 * exp(-x/7.5584)
+  92695.9275831 / x^0.6132192 * exp(x / -7.3835094)
+}
+fitted <- my_fitted_fn(bins)
+df <- data.frame(bins = bins, num = bins_data, fitted = fitted) %>%
+    filter(num > 10 & bins > 1 & num > 30 & bins <= 30)
+ggplot(df, aes(x = bins)) +
+  geom_point(aes(y = num), color="blue") +
+  geom_point(aes(y = fitted), color="orange") +
+  scale_y_log10() + scale_x_log10() + 
+  ylab("number of methods") + xlab("lines of code") + theme_simple(8) + theme(plot.margin = unit(c(5,0,0,0), "mm"))
+
+# View(fitted)
+```
+
+```{r}
+start <- list(a = 800000, b = 2.5, c=-30)
+model <- nls(num ~ a / bins^b * exp(bins / c), data=df, start=start, trace=TRUE,
+             control=nls.control(
+               minFactor = 1/(1024 * 1024 * 1024),
+               maxiter = 1000))
+library(formula.tools)
+invert(num ~ a / bins^b * exp(bins / c))
+```
+
+
+```{r}
+n <- nrow(methods_data)
+numbers <- runif(n)
+
+df <- data.frame(num = numbers)
+ggplot(df, aes(x=num)) + geom_histogram() + geom_density()
+
+# double legacy_standard_exponential(aug_bitgen_t *aug_state) {
+#   /* We use -log(1-U) since U is [0, 1) */
+#   return -log(1.0 - legacy_double(aug_state));
+# }
+# 
+# double legacy_pareto(aug_bitgen_t *aug_state, double a) {
+#   return exp(legacy_standard_exponential(aug_state) / a) - 1;
+# }
+
+std_exp <- function(U) {
+  #-log(1.0 - U)
+  -log1p(-U)
+}
+
+std_exp_num <- std_exp(numbers)
+df <- data.frame(num = std_exp_num)
+ggplot(df, aes(x=num)) + geom_histogram() + geom_density()
+
+pareto <- function (U, a) {
+  # exp(std_exp(U) / a) - 1
+  expm1(std_exp(U) / a)
+}
+
+pareto_num <- expm1(pareto(numbers, 50)) * 50000
+df <- data.frame(num = pareto_num)
+grid.arrange(
+  ggplot(df, aes(x=num)) + geom_histogram(binwidth = 10) + geom_density(),
+  ggplot(methods_data, aes(x=linesOfCode)) + geom_histogram(binwidth = 10) + geom_density(),
+  ncol = 2
+)
+```
+
+## TODO:
+- manually determine the numbers of methods with 0-30 LOC
+
+```{r}
+bins <- 0:30
+# bins <- 0:31
+loc <- methods_data$linesOfCode
+bins_data <- sapply(bins, function(i) {
+  if (i < 31) {
+    length(loc[loc == i])
+  } else {
+    sum(loc[loc >= 30]) / 30
+  }
+})
+
+ggplot(data.frame(bins = bins, num = bins_data), aes(x = bins, y = num)) +
+  # geom_col()
+  geom_point() +
+  scale_y_log10() +
+  scale_x_log10()
+  
+
+
+total <- sum(bins_data)
+parts <- bins_data / total
+ggplot(data.frame(bins = factor(bins), num = parts), aes(x = bins, y = num)) +
+  # geom_col()
+  geom_point()
+
+
+prefix_sum_parts <- cumsum(parts)
+ggplot(data.frame(bins = factor(bins), num = cumsum(parts)), aes(x = bins, y = num)) + geom_col()
+sum(parts)
+
+
+loc_from_u <- function (u) {
+  Position(function (e) { u < e }, prefix_sum_parts)
+}
+ 
+random_data <- runif(length(methods_data$linesOfCode))
+loc_data <- sapply(random_data, loc_from_u)
+ggplot(data.frame(num = loc_data),
+       aes(x = num)) +
+  geom_histogram(binwidth = 1)
+sum(loc_data)
+
+```
+squeeze all methods into 0-30LOC methods
+see what distribution looks like.
+determine the ratios for each of the 0-30 segements.
+Uses that to split the uniform range and distribute random numbers
