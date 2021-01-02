@@ -1,57 +1,85 @@
 ---
-#!./large-source-code-probability-distributions.knit.sh
-title: "Generating Random Code that Looks Real"
+title: "Towards a Synthetic Benchmark to Assess VM Startup, Warmup, and Cold-Code Performance"
 output:
+  html_document:
+    df_print: paged
   html_notebook: default
-date: '2020-12-?? ??:??:29 +0000'
+  word_document: default
+date: "2021-01-02 ??:??:29 +0000"
 layout: post
-categories:
-  - Research
+categories: Research
 tags:
-  - Smalltalk
-  - Pharo
-  - Language Implementation
-  - Research
-  - SOMns
-  - Metrics
+- Smalltalk
+- Pharo
+- Language Implementation
+- Research
+- SOMns
+- Metrics
 custom_scss: |
   figure { margin-left: 0; margin-right: 0; }
   figure img { margin-left: auto; margin-right: auto; display: block; }
   figure.full img { max-width: 100%; }
   figure.two-thirds img { max-width: 66%; }
-
 htmlmeta:
   description: TODO
   keywords: Smalltalk, Pharo, Language Implementation, Research, SOMns, Metrics
-  author: Stefan Marr
+  author: "Stefan Marr"
 ---
 
-In an attempt to have better benchmarks for virtual machine, interpreter,
-and compiler research, I am currently trying to generate code that is in some
-ways realistic, but easier to work with than actual applications.
+One of the hard problems in language implementation research is benchmarking.
+Some people argue, we should benchmark only applications that actually matter
+to people. Though, this has various issues. Often, such applications are embedded in
+larger systems, and it's hard to isolate the relevant parts. In many cases,
+these applications can also not be made available to other researchers.
+And, of course, things change over time, which means
+maintaining projects like [DaCapo](http://dacapobench.org/), [Renaissance](https://renaissance.dev/),
+or [Jet Stream](https://browserbench.org/JetStream/) is a huge effort.
 
-In the last two blog posts, I looked at static metrics for code to get an idea
-of how large code bases actually look like.
+Which brought me to the perhaps futile question of how we could have more realistic
+synthetic benchmarks. [ACDC](https://dl.acm.org/doi/10.1145/2491894.2464161)
+and [ACDC-JS](https://research.google/pubs/pub43216/) are synthetic garbage collection benchmarks.
+While they don't seem to be widely used, they seemed to have been a useful
+tool for specific tasks. Based on observing metrics for a range of relevant
+programs, these synthetic benchmarks were constructed to be configurable
+and allow us to measure a range of realistic behaviors.
 
-In this post, I am setting out to use what I learned about the typical length
-of methods and generate millions of lines of code that look like they could
-actually be real. At least when only considering the length of methods.
+I am currently interested in the startup, warmup, and cold-code performance
+of virtual machines, and want to study their performance issues.
+To me it seems that I need to look at large programs to get interesting and relevant results. With large, I mean millions of lines of code, because that's where our systems currently struggle.
+So, how could we go about to create a synthetic benchmark for huge code bases?
 
-Small steps...
+## Generating Random Code that Looks Real
 
-So, let's get started by looking at how the length of methods look like in
+In my last two blog posts [[1](https://stefan-marr.de/2020/12/shape-of-large-source-code/), [2](https://stefan-marr.de/2020/12/shape-of-large-source-code-ruby/)],
+I looked at the shape of large code bases in Pharo and Ruby to obtain data
+for a new kind of synthetic benchmark. I want to try to generate random code
+that looks "real". And by looking real I mean for the moment that it is shaped
+in a way that is similar to real code. This means, methods have realistic
+length, number of local variables, and arguments. For classes, they should have
+a realistic number of methods and instance variables.
+In the last two blog posts, I looked at the corresponding static code metrics
+to get an idea of how large code bases actually look like.
+
+In this post, I am setting out to use the data to get a random number generator
+that can be used to generate "realistic looking" code bases.
+Of course, this doesn't mean that the code does do anything realistic.
+
+Small steps... One at a time... 👨🏼‍🔬
+
+So, let's get started by looking at how the length of methods looks like in
 large code bases.
 
 Before we get started, just one more simplification: I will only consider
 methods that have 1 to 30 lines (of code).
-Setting an upper bound will make some of the steps here simpler.
-And a little silly, but nonetheless an issue, it will avoid me having to change
+Setting an upper bound will make some of the steps here simpler,
+and plots more legible.
+
+And a perhaps little silly, but nonetheless an issue, it will avoid me having to change
 one of the language implementations I am interested in, which is unfortunately
-limited to 128 bytecodes and 128 literals (constants, method names, etc),
-which in practice translates to somethine like 30 lines of code.
+limited to 128 bytecodes and 128 literals (constants, method names, etc.),
+which in practice translates to something like 30 lines of code.
 While this could be fixed, let's assume 30 lines of code per method
 ought to be enough for anybody...
-
 
 
 ```{r setup, echo=FALSE, include=FALSE, cache=FALSE}
@@ -82,6 +110,11 @@ method_files <- c(
   './part-1/internal/methods.csv'
 )
 
+classes_files <- c(
+  './part-2/internal/classes.csv',
+  './part-1/internal/classes.csv'
+)
+
 load_all <- function (file_names) {
   file_names %>%
     map(function (file_name) {
@@ -91,11 +124,36 @@ load_all <- function (file_names) {
     reduce(rbind)
 }
 
+classes_data_pharo <- load_all(classes_files) %>%
+  select(-X) %>%
+  distinct(class, .keep_all = TRUE)
+
+
+classes_data_ruby <- read.csv("/Users/smarr/Projects/Smalltalk-Code-Characteristics/Ruby-data/classes.csv")
+classes_data_ruby$isTest <- as.logical(classes_data_ruby$isTest)
+
+
 methods_data <- load_all(method_files) %>%
   select(-c(X, id)) %>%
   distinct(class, selector, .keep_all = TRUE)
 
 methods_data_ruby <- read.csv("/Users/smarr/Projects/Smalltalk-Code-Characteristics/Ruby-data/methods.csv")
+```
+
+```{r plot-fns, echo=FALSE, include=FALSE, cache=FALSE}
+num_hist <- function (data, binwidth, fill, ylab, xlab) {
+  plot <- ggplot(data, aes(x=num)) +
+    geom_histogram(binwidth = binwidth, fill = fill) +
+    scale_force_origin_continuous2() +
+    xlab(xlab) +
+    ylab(ylab) +
+    theme_simple(8) +
+    theme(plot.margin = unit(c(5,0,0,0), "mm"))
+  if (is.null(ylab)) {
+    plot <- plot + theme(axis.title.y = element_blank())
+  }
+  plot
+}
 ```
 
 
@@ -124,9 +182,9 @@ lines_per_method_ruby <- methods_data_ruby %>%
 
 cp("<figure class='full'>")
 grid.arrange(
-  num_hist(loc_per_method_pharo  %>% filter(num <= 30), 1, "#3465a4", "number of methods", "non-empty lines (Pharo)"),
-  num_hist(loc_per_method_ruby   %>% filter(num <= 30), 1, "#fcaf3e", NULL, "lines of code (Ruby)"),
-  num_hist(lines_per_method_ruby %>% filter(num <= 30), 1, "#ad7fa8", NULL, "lines (Ruby)") +
+  num_hist(loc_per_method_pharo  %>% filter(num <= 30), 1, "#fcaf3e", "number of methods", "non-empty lines (Pharo)"),
+  num_hist(loc_per_method_ruby   %>% filter(num <= 30), 1, "#ad7fa8", NULL, "lines of code (Ruby)"),
+  num_hist(lines_per_method_ruby %>% filter(num <= 30), 1, "#3465a4", NULL, "lines (Ruby)") +
     theme(plot.margin = unit(c(5,5,0,0), "mm")),
   ncol = 3)
 cp("<figcaption>Distribution of the length of methods.</figcaption>")
@@ -149,111 +207,445 @@ Though, the random number generators we have in most systems generate numbers
 in a uniform distribution typically in the range from 0 to 1.
 This means, each number between 0 and 1 is going to be equally likely to be
 picked.
-To get other kinds of distributions, for instance,
-the normal distribution, we can use what is called the *inverted cumulative distribution function*.
+To get other kinds of distributions,
+for instance the normal distribution,
+we can use what is called the *inverted cumulative distribution function*.
 When we throw our uniformly distributed numbers into this function,
-we should end up with random numbers that are distrubted according to the
+we should end up with random numbers that are distributed according to the
 distribution that we want.
 
-This means, I need to do the following:
+One of the options to do this would be:
 
 1. determine the cumulative distribution of the method length
 2. approximate a function to represent the cumulative distribution
-3. invert the function
+3. and invert the function
 
+I found this [post here helpful](https://blog.demofox.org/2017/08/05/generating-random-numbers-from-a-specific-distribution-by-inverting-the-cdf/).
+Though, I struggled defining a good enough function to get results I liked.
+
+So, instead, let's do it the pedestrian way:
+
+1. calculate the cumulative sum for the method length (cumulative distribution)
+2. normalize it to the sum of all lengths
+3. use the result to look up the desired method length for a uniform random number
 
 ### Determining the Cumulative Distribution
 
 Ok, so, the first step is to determine the cumulative distribution.
+Since we have the three different cases for Pharo, Ruby with all lines and lines of code,
+this is slightly more interesting.
 
+```{r cum-dist-method-length, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
+calc_cum_p <- function(data, data_var, type_name, max_data_var_value = 30) {
+  result <- data %>%
+    filter({{ data_var }} <= max_data_var_value) %>%
+    group_by({{ data_var }}) %>%
+    summarise(
+      num = n(),
+      type = type_name,
+      .groups = "drop") %>%
+    rename(length = {{ data_var }}) %>%
+    mutate(
+      cum = cumsum(num),
+      cum_p = cum / max(cum))
 
-```{r}
-loc_freq_pharo <- methods_data %>%
-  filter(linesOfCode <= 30) %>%
-  group_by(linesOfCode) %>%
-  summarise(
-    num = n(),
-    type = "Pharo",
-    .groups = "drop") %>%
-  rename(length = linesOfCode)
-loc_freq_pharo$cum <- cumsum(loc_freq_pharo$num)
-loc_freq_pharo$cum_p <- loc_freq_pharo$cum / max(loc_freq_pharo$cum)
+  result
+}
 
-loc_freq_ruby <- methods_data_ruby %>%
-  filter(linesOfCode <= 30) %>%
-  group_by(linesOfCode) %>%
-  summarise(
-    num = n(),
-    type = "Ruby (LOC)",
-    .groups = "drop") %>%
-  rename(length = linesOfCode)
-loc_freq_ruby$cum <- cumsum(loc_freq_ruby$num)
-loc_freq_ruby$cum_p <- loc_freq_ruby$cum / max(loc_freq_ruby$cum)
-
-line_freq_ruby <- methods_data_ruby %>%
-  filter(lines <= 30) %>%
-  group_by(lines) %>%
-  summarise(
-    num = n(),
-    type = "Ruby (lines)",
-    .groups = "drop") %>%
-  rename(length = lines)
-line_freq_ruby$cum <- cumsum(line_freq_ruby$num)
-line_freq_ruby$cum_p <- line_freq_ruby$cum / max(line_freq_ruby$cum)
+loc_freq_pharo <- calc_cum_p(methods_data, linesOfCode, "Pharo")
+loc_freq_ruby  <- calc_cum_p(methods_data_ruby, linesOfCode, "Ruby (LOC)")
+line_freq_ruby <- calc_cum_p(methods_data_ruby, lines, "Ruby (lines)")
 
 loc_freq <- rbind(loc_freq_pharo, loc_freq_ruby, line_freq_ruby)
 
 
-loc_freq_means <- loc_freq %>%
-  filter(length > 0) %>%
-  group_by(length) %>%
-  summarise(mean = mean(cum_p),
-            geo.mean = geometric.mean(cum_p),
-            harm.mean = harmonic.mean(cum_p),
-            .groups = "drop") %>%
-  pivot_longer(ends_with("mean"), names_to = "type", values_to = "cum_p") %>%
-  transform(cum = NA, num = NA)
-
-
-
-ggplot(rbind(loc_freq, loc_freq_means) %>% filter(length > 0),
+cp("<figure class='two-thirds'>")
+ggplot(loc_freq %>% filter(length > 0),
        aes(x = length, y = cum_p * 100, color = type)) +
-  geom_point(size = 0.7, alpha = 0.7) +
-  gghighlight(is.na(cum), label_key = type, use_direct_label = FALSE) +
-  scale_y_log10() +
-  scale_x_log10() +
+  geom_point(size = 0.7) +  # , alpha = 0.7
+  # scale_y_log10() +
+  # scale_x_log10() +
+  scale_color_manual(values = c("#fcaf3e", "#3465a4", "#ad7fa8")) +
   theme_simple(8) +
   xlab("length (loc or lines)") +
-  ylab("cummulative % methods") +
-  theme(plot.margin = unit(c(5,0,0,0), "mm"))
+  ylab("cumulative % of methods") +
+  theme(plot.margin = unit(c(5,0,0,0), "mm"),
+        legend.position = c(0.8,0.5))
+cp("<figcaption>Percentage of methods with a specific length in lines or LOC.</figcaption>")
+cp("</figure>")
 ```
 
+The plot above shows the percentage of methods that have a length
+smaller or equal to a specific size.
+
+So, the next question is, which metrics should I choose?
+Since the data is a bit noisy, especially for small methods,
+let's try and see what the different types of means give us.
+
+```{r cum-dist-means, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
+calc_cum_p_means <- function(data, data_var) {
+  data %>%
+    ungroup() %>%
+    group_by({{ data_var }}) %>%
+    summarise(mean = mean(cum_p),
+              geo.mean = geometric.mean(cum_p),
+              harm.mean = harmonic.mean(cum_p),
+              .groups = "drop") %>%
+    pivot_longer(ends_with("mean"), names_to = "type", values_to = "cum_p") %>%
+    transform(cum = NA, num = NA)  
+}
+
+loc_freq_means <- loc_freq %>%
+  filter(length > 0) %>%
+  calc_cum_p_means(length)
 
 
+cp("<figure class='two-thirds'>")
+suppressWarnings(ggplot(rbind(loc_freq, loc_freq_means) %>% filter(length > 0),
+       aes(x = length, y = cum_p * 100, color = type)) +
+  geom_point(size = 0.7, alpha = 0.7) +
+  scale_color_manual(values = c("#fcaf3e", "#3465a4", "#ad7fa8")) +
+  gghighlight(is.na(cum), label_key = type, use_direct_label = FALSE) +
+  # scale_y_log10() +
+  # scale_x_log10() +
+  theme_simple(8) +
+  xlab("length (loc or lines)") +
+  ylab("cumulative % of methods") +
+  theme(plot.margin = unit(c(5,0,0,0), "mm"),
+        legend.position = c(0.8,0.5)))
+cp("<figcaption>Different means applied to the cumulative percentage of methods for a given length.</figcaption>")
+cp("</figure>")
+```
 
+From the above plot, the geometric mean seems a good option.
+Mostly because I don't want to have a too high and too low number of methods
+with a single line.
 
+Using the geometric mean, gives us the following partial cumulative distribution
+table:
 
-```{r}
+```{r result-table, results='asis', cache=TRUE}
 cum_dis_data <- loc_freq_means %>%
   filter(type == "geo.mean") %>%
   select(c(length, cum_p))
 
+kbl(cum_dis_data %>% filter(length < 10) %>% rename(cum.perc = cum_p)) %>%
+  column_spec(2, width = "10em") %>%
+  kable_minimal(html_font = NA)
+```
+
+In R, the language I use for these blog posts,
+I can then use something like the following to take a uniform random number
+from the range of 0-1 to determine the desired method length in the range
+of 1-30 lines (`u` being here the random number):
+
+```
+loc_from_u <- function (u) {
+  Position(function (e) { u < e }, cumulative_distribution_tbl)
+}
+```
+
+There are probably more efficient ways of going about it.
+I suppose a binary search would be a good option, too.
+
+The general idea is that with our random number `u`,
+we find the last position in our array with the cumulative distribution,
+where `u` is smaller than the value in the array at that position.
+The position then corresponds to the desired length of a method.
+
+```{r result-with-test, results='asis', cache=TRUE, fig.height=2.6, fig.width=8}
 loc_from_u <- function (u) {
   Position(function (e) { u < e }, cum_dis_data$cum_p)
 }
- 
-random_data <- runif(100000)
-loc_data <- sapply(random_data, loc_from_u)
-ggplot(data.frame(num = loc_data),
-       aes(x = num)) +
-  geom_histogram(binwidth = 1)
-sum(loc_data)
 
+
+test_hist <- function(num_rn, xlab, ylab) {
+  random_data <- runif(num_rn)
+  loc_data <- sapply(random_data, loc_from_u)
+  ggplot(data.frame(num = loc_data),
+       aes(x = num)) +
+    geom_histogram(binwidth = 1, fill = "#3465a4")+
+    scale_force_origin_continuous2() +
+    xlab(xlab) +
+    ylab(ylab) +
+    theme_simple(8) +
+    theme(plot.margin = unit(c(5,0,0,0), "mm"))
+}
+
+cp("<figure class='full'>")
+grid.arrange(
+  test_hist(100, "method length", "number of methods"),
+  test_hist(1000, "method length", NULL),
+  test_hist(100000, "method length", NULL) +
+    theme(plot.margin = unit(c(5,5,0,0), "mm")),
+  ncol = 3)
+cp("<figcaption>Three examples of methods generated, for 100, 1,000, or 100,000 methods.</figcaption>")
+cp("</figure>")
 ```
 
+As a test, the three plots above are generated from 100, 1,000, and 100,000
+uniformly distributed random numbers, and it looks pretty good.
+Comparing to the very first set of plots in this post, this seems like a workable
+and relatively straightforward approach.
+
+To use these results and generate methods of realistic sizes in other languages,
+the full cumulative
+distribution is as follows: [`r str_c(cum_dis_data$cum_p, collapse = ", ")`].
+
+## Method Arguments and Local Variables
+
+With the basics down, we can look at the number of arguments and local variables
+of methods. One thing I haven't really thought about in the previous posts
+is that there's a connection between the various metrics. They are not independent of each other.
+
+Perhaps this is most intuitive for the number of local variables a method has.
+We wouldn't expect a method with a single line of code to have many local
+variables, while longer methods may tent to have more local variables, too.
+
+### Number of Method Arguments 
+
+Let's start out by looking at how method length and number of arguments relate
+to each other.
+
+I'll use the cumulative distribution for these plots, since that's what I am
+looking for in the end.
+
+```{r cum-dist-num-args, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
+calc_cum_p_per_group <- function(data, group_var, data_var, type_name, max_data_var_value = 30) {
+  result <- data %>%
+    filter({{ data_var }} <= max_data_var_value) %>%
+    group_by({{ group_var }}, {{ data_var }}) %>%
+    summarise(
+      num = n(),
+      type = type_name,
+      .groups = "drop") %>%
+    rename(length = {{ data_var }}) %>%
+    group_by({{ group_var }}) %>%
+    mutate(
+      cum = cumsum(num),
+      cum_p = cum / max(cum))
+
+  result
+}
+
+apm_freq_pharo <- calc_cum_p_per_group(methods_data %>% filter(linesOfCode > 0 & linesOfCode <= 30), linesOfCode, numArgs, "Pharo")
+apm_freq_ruby <- calc_cum_p_per_group(methods_data_ruby %>% filter(linesOfCode > 0 & linesOfCode <= 30), linesOfCode, numArgs, "Ruby")
 
 
+cp("<figure class='two-thirds'>")
+suppressWarnings(grid.arrange(
+    ggplot(apm_freq_pharo, aes(x = length, y = cum_p * 100, color = as.factor(linesOfCode))) +
+        geom_line(size = 0.7, alpha = 0.7) +
+        scale_color_manual(values = scales::seq_gradient_pal("blue", "red", "Lab")(seq(0,1,length.out=11))) +
+        gghighlight(linesOfCode %% 3 == 0 | linesOfCode == 1) +
+        theme_simple(8) +
+        xlab("number of arguments (Pharo)") +
+        ylab("cumulative % of methods") +
+        theme(plot.margin = unit(c(5,0,0,0), "mm"),
+              legend.position = "none"),
+    ggplot(apm_freq_ruby, aes(x = length, y = cum_p * 100, color = as.factor(linesOfCode))) +
+        geom_line(size = 0.7, alpha = 0.7) +
+        scale_color_manual(values = scales::seq_gradient_pal("blue", "red", "Lab")(seq(0,1,length.out=11))) +
+      gghighlight(linesOfCode %% 3 == 0 | linesOfCode == 1) +
+        theme_simple(8) +
+        xlab("number of arguments (Ruby)") +
+        ylab(NULL) +
+        guides(color=guide_legend(ncol=2)) +
+        theme(plot.margin = unit(c(5,0,0,0), "mm"),
+              legend.position = c(0.8,0.5)),
+    ncol = 2))
+cp("<figcaption>Percentage of methods with a specific number of arguments.</figcaption>")
+cp("</figure>")
+```
+
+The two plots above show for each method length from 1-30 a line
+(so, this is where limiting the method length becomes actually handy).
+Though, because there are many, I highlight only every third length,
+including length 1 methods.
+The bluest blue is length 1, and the red is length 30.
+
+We can see here differences between the languages.
+For instance, for methods with only 1 line in Pharo, only ≈45% of them
+have no argument. While for Ruby methods, that's perhaps around 70%.
+
+The other interesting bit that is clearly visible is that the number
+of arguments doesn't have a simple direct relationship to length.
+Indeed, longer methods seem to have more likely fewer arguments.
+While medium length methods are more likely to have a few more arguments,
+at least for the Ruby data this seems to be the case.
+
+So, from these plots, I conclude that I actually need a different cumulative
+distribution table for each method length. Since we saw how they look for
+method length, I won't include the details. Though, of course happy to share
+the data if anyone wants it.
+
+### Number of Methods Locals
+
+Next up, let's look at the number of locals.
+
+```{r cum-dist-num-locals, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
+lpm_freq_pharo <- calc_cum_p_per_group(methods_data      %>% filter(linesOfCode > 0 & linesOfCode <= 30), linesOfCode, numLocals, "Pharo")
+lpm_freq_ruby  <- calc_cum_p_per_group(methods_data_ruby %>% filter(linesOfCode > 0 & linesOfCode <= 30), linesOfCode, numLocals, "Ruby")
 
 
+cp("<figure class='two-thirds'>")
+suppressWarnings(grid.arrange(
+    ggplot(lpm_freq_pharo, aes(x = length, y = cum_p * 100, color = as.factor(linesOfCode))) +
+        geom_line(size = 0.7, alpha = 0.7) +
+        scale_color_manual(values = scales::seq_gradient_pal("blue", "red", "Lab")(seq(0,1,length.out=11))) +
+        gghighlight(linesOfCode %% 3 == 0 | linesOfCode == 1) +
+        theme_simple(8) +
+        xlab("number of locals (Pharo)") +
+        ylab("cumulative % of methods") +
+        theme(plot.margin = unit(c(5,0,0,0), "mm"),
+              legend.position = "none"),
+    ggplot(lpm_freq_ruby, aes(x = length, y = cum_p * 100, color = as.factor(linesOfCode))) +
+        geom_line(size = 0.7, alpha = 0.7) +
+        scale_color_manual(values = scales::seq_gradient_pal("blue", "red", "Lab")(seq(0,1,length.out=11))) +
+      gghighlight(linesOfCode %% 3 == 0 | linesOfCode == 1) +
+        theme_simple(8) +
+        xlab("number of locals (Ruby)") +
+        ylab(NULL) +
+        guides(color=guide_legend(ncol=2)) +
+        theme(plot.margin = unit(c(5,0,0,0), "mm"),
+              legend.position = c(0.8,0.5)),
+    ncol = 2))
+cp("<figcaption>Percentage of methods with a specific number of local variables.</figcaption>")
+cp("</figure>")
+```
 
+For the Pharo data, it's not super readable, but basically 100% of methods
+of length 1 have zero local variables.
+Compared to the plot on arguments, we also see a pretty direct relationship
+to length, because the blue-to-red gradient comes out nicely in the plot.
+
+In the case of Ruby, this seems to be similar, but perhaps not as
+cleanly as for Pharo.
+The different y-axis start points are also interesting, because they indicate
+that longer methods in Pharo are more likely to have arguments than in Ruby.
+
+For generating code, I suppose one needs to select the distributions that are
+most relevant for one's goal.
+
+## Classes: Number of Methods and Fields
+
+After looking at properties for methods, let's look at classes.
+I fear, these various metrics are pretty tangled up,
+and one could probably find many more interesting relationships
+between them, but I'll restrict myself for this post to the most basic ones.
+First I'll look at the cumulative distribution for the number of methods per class,
+and then look at the number of instance variables classes have depending on
+their size.
+
+### Number of Methods per Class
+
+I'll restrict my analysis here to classes with a maximum of 100 methods,
+because the data I have does not include enough classes with more than 100 methods.
+
+
+```{r cum-dist-num-methods, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
+max_methods <- 100
+mpc_freq_ruby <- calc_cum_p(classes_data_ruby %>% filter(numMethods > 0), numMethods, "Ruby", max_methods)
+
+methods_pharo <- methods_data %>%
+  group_by(class) %>%
+  summarise(
+    numMethods = n(),
+    .groups = "drop")
+mpc_freq_pharo <- calc_cum_p(methods_pharo, numMethods, "Pharo", max_methods)
+mpc <- rbind(mpc_freq_pharo, mpc_freq_ruby)
+
+cp("<figure class='two-thirds'>")
+ggplot(mpc, aes(x = length, y = cum_p * 100, color = type)) +
+  geom_point(size = 0.7, alpha = 0.7) +
+  scale_color_manual(values = c("#fcaf3e", "#3465a4", "#ad7fa8")) +
+  theme_simple(8) +
+  xlab("number of methods") +
+  ylab("cumulative % classes") +
+  theme(plot.margin = unit(c(5,0,0,0), "mm"))
+cp("<figcaption>Percentage of classes with a specific number of methods.</figcaption>")
+cp("</figure>")
+```
+
+As we saw in the [previous post](https://stefan-marr.de/2020/12/shape-of-large-source-code-ruby/),
+we can here see that Ruby has many more classes with only one or two methods. On the other hand, it seems to have slightly fewer larger classes.
+Expressed differently, about 60% of all Ruby methods (which includes closures)
+have 1 or 2 arguments, while in the case of Pharo (where closures where ignored),
+we need about 5-6 arguments to reach the same level.
+
+### Number of Fields for Classes with a Specific Number of Methods
+
+For the number of fields of a class, I can easily look at the relation
+to the number of methods, too.
+
+```{r cum-dist-inst-fields, results='asis', cache=TRUE, fig.height=2.6, fig.width=5.3}
+classes_pharo <- classes_data_pharo %>%
+  left_join(methods_pharo, by = c("class"))
+
+mi_freq_ruby  <- calc_cum_p_per_group(classes_data_ruby %>% filter(numMethods <= 50), numMethods, numDirectInstVars, "Ruby")
+mi_freq_pharo <- calc_cum_p_per_group(classes_pharo %>% filter(numMethods <= 50),     numMethods, numDirectInstVars, "Pharo")
+mi_freq <- rbind(mi_freq_pharo, mi_freq_ruby)
+
+cp("<figure class='two-thirds'>")
+suppressWarnings(grid.arrange(
+    ggplot(mi_freq_pharo, aes(x = length, y = cum_p * 100, color = as.factor(numMethods))) +
+        geom_line(size = 0.7, alpha = 0.7) +
+        scale_color_manual(values = scales::seq_gradient_pal("blue", "red", "Lab")(seq(0,1,length.out=12))) +
+        gghighlight(numMethods %% 5 == 0 | numMethods == 1) +
+        theme_simple(8) +
+        xlab("number of fields (Pharo)") +
+        ylab("cumulative % of classes") +
+        theme(plot.margin = unit(c(5,0,0,0), "mm"),
+              legend.position = "none"),
+    ggplot(mi_freq_ruby, aes(x = length, y = cum_p * 100, color = as.factor(numMethods))) +
+        geom_line(size = 0.7, alpha = 0.7) +
+        scale_color_manual(values = scales::seq_gradient_pal("blue", "red", "Lab")(seq(0,1,length.out=12))) +
+        gghighlight(numMethods %% 5 == 0 | numMethods == 1) +
+        theme_simple(8) +
+        xlab("number of fields (Ruby)") +
+        ylab(NULL) +
+        guides(color=guide_legend(ncol=2)) +
+        theme(plot.margin = unit(c(5,0,0,0), "mm"),
+              legend.position = c(0.8,0.5)),
+    ncol = 2))
+cp("<figcaption>Percentage of classes with a specific number of fields.</figcaption>")
+cp("</figure>")
+```
+
+In the two plots above, we see that there is an almost clear relationship
+between the number of methods and fields. A class having more methods seems to
+indicate that is may have more fields.
+For both languages, there's some middle ground where things are not as clear,
+but at least for classes with fewer methods, it seems to hold well.
+
+## Conclusion
+
+The most important insight for me from this exercise is that I can generate
+code that has a realistic shape relatively straightforwardly based on the data
+collected.
+
+At least, it seems easy and reliable to get a random number distribution of the
+desired shape.
+
+In addition, we saw that there are indeed interdependencies between the different
+metrics. This is not too surprising, but something one needs to keep
+in mind when generating "realistic" code.
+
+So, where from here? Well, I already got a code generator that can generate
+millions of lines of code that use basic arithmetic operations.
+The next step would be to fit this code into a shape that's more realistic.
+One problem I had before is that my generated code started stressing
+things like the method look up, in a way real code doesn't.
+Shaping things more realistically, will help avoid optimizing things that
+may not matter. Then again, we see pathologic cases also in real code.
+
+Ending this post, there are of course more open questions, for instance:
+ - how do I generate realistic behavior?
+ - do large chunks of generated code allow me to study warmup and cold-code performance in a meaningful way? Or asked differently, does the generated code behave similar
+ enough to real code?
+ - which other metrics are relevant to generate realistic code?
+
+Though, I fear, I'll need to wait until spring or summer to revisit those questions.
+
+For suggestions, comments, or questions, find me on Twitter [@smarr](https://twitter.com/smarr).
 
