@@ -67,7 +67,7 @@ drop_unused_factors <- function (dataSet) {
 
 map_names <- function(old_names, name_map) {
   for (i in 1:length(old_names)) {
-    old_name <- old_names[i]
+    old_name <- old_names[[i]]
     if (!is.null(name_map[[old_name]])) {
       old_names[i] <- name_map[[old_name]]
     }
@@ -75,3 +75,9 @@ map_names <- function(old_names, name_map) {
   old_names
 }
 
+## This function generates a nice logarithmic axis label
+## x can be a sequence.
+## Usage: logarithmic_axis_labels(seq(1, 10, by=0.5))
+logarithmic_axis_labels <- function (x, base = 10, digits = 2) {
+  round(base^x, digits = digits)
+}

@@ -9,7 +9,9 @@ source("libs/helper.R")
 
 row_names <- c("Time", "Benchmark", "VirtualMachine", "Platform",
                   "ExtraArguments", "Cores", "Iterations", "None", "Criterion", "Criterion-total")
-bench <- load_data_file("~/Projects/PhD/IBM/bench-ot/results.data.csv", row_names)
+bench <- rbind(load_data_file("~/Projects/PhD/IBM/bench-ot/results.data.csv", row_names),
+               load_data_file("~/Projects/PhD/IBM/bench-ot/results.data.tilera.csv", row_names))
+
 
 # Questions to be answered:
 #  1. What is the performance impact of using an object table?
@@ -37,12 +39,19 @@ bench <- subset(bench, Criterion == "total")
 bench <- subset(bench, select=c(Time, Platform, ObjectTable, Header,
                                 Benchmark, ExtraArguments, Cores))
 
+# We also are only intersted in the real weak-scaling benchmarks
+norm_bench <- subset(norm_bench,
+                     !grepl("^1 ", ExtraArguments)    # those beginning with "1 " put load on a single core
+                     & !grepl("s0 ", ExtraArguments)) # those having "s0 " in it put 10x load on each core
+norm_bench <- droplevels(norm_bench)
+
+
 # We assume that all variations in measurements come from the same
 # non-deterministic influences.
 # This allows to order the measurements, before corelating them pair-wise.
 bench <- orderBy(~Time + Platform + ObjectTable + Header + Benchmark + ExtraArguments + Cores, bench)
 
-# Now on to question 1
+# Now on to Question 1
 ot_data <- subset(bench, Header != "no")
 
 # Calculate the performance ratio
@@ -55,22 +64,54 @@ norm_ot_data <- drop_unused_factors(norm_ot_data)
 
 pdf(file="Cores1-full-header-OTimpact.pdf", width=40, height=20)
 
-beanplot(SpeedRatio ~ Cores + Header,
+beanplot(SpeedRatio ~ Platform + Cores + Header,
          data = norm_ot_data,
          what = c(1,1,1,0),
          #main="Performance Comparison",
-         log="", # don't use log-scale
+         log="y", # don't use log-scale
          ylab="Runtime: noOT/OT",
          #cutmin=0.8, # allows to cut off outliers, but more like lying...
          #cutmax=1.2,
          #ylim=c(0.95, 1.05),
          las=2,
          #par(mgp=c(3,2,0)),
+         side="both",
+         col = list("black", c("grey", "white")),
          ignored_variable="at_the_end")
 dev.off()
 
-beanplot(SpeedRatio ~ Benchmark,
-         data = subset(norm_ot_data, Cores == 1 & Header == "half"),
+beanplot(SpeedRatio ~ Platform + Benchmark,
+         data = subset(norm_ot_data, Header == "full" & Platform == "tilera"), # Cores > 16 &
+         what = c(1,1,1,0),
+         #main="Performance Comparison",
+         log="", # don't use log-scale
+         ylab="Runtime: VMADL/handcrafted",
+         #cutmin=0.8, # allows to cut off outliers, but more like lying...
+         #cutmax=1.2,
+         #ylim=c(0.95, 1.05),
+         las=2,
+         #par(mgp=c(3,2,0)),
+         side="both",
+         col = list("black", c("grey", "white")),
+         ignored_variable="at_the_end")
+
+# Question 2
+#  2. What is the performance impact of adding header words?
+#     -> relevant data: *-noOT-full-header vs. *-noOT-half-header vs. *-noOT-no-header
+#                   and *-OT-full-header vs. *-OT-half-header
+
+# Calculate the performance ratio
+norm_header_data <- ddply(bench, ~ Platform + ObjectTable + Benchmark + ExtraArguments + Cores,
+      transform,
+      SpeedRatio = Time / Time[Header == "full"])
+# Now just drop all the stuff we do not need
+norm_header_data <- subset(norm_header_data, Header != "full",
+                           c(SpeedRatio, Platform, ObjectTable, Header,
+                             Benchmark, ExtraArguments, Cores))
+norm_header_data <- drop_unused_factors(norm_header_data)
+
+beanplot(SpeedRatio ~ ObjectTable + Header,
+         data = subset(norm_header_data, Cores == 1),
          what = c(1,1,1,0),
          #main="Performance Comparison",
          log="", # don't use log-scale
@@ -82,77 +123,8 @@ beanplot(SpeedRatio ~ Benchmark,
          #par(mgp=c(3,2,0)),
          ignored_variable="at_the_end")
 
-die-here  ###---->>> below old script
 
-# TODO: - look at data from 1-core only, bar chart?
-#         and 8 cores only
-#       - calculate the average with 1 core, with 8, and completely
-
-## Drop some not so useful benchmarks
-## We are not interested in the scheduler benchmarks, and the single core slowdown problem
-#bench_filtered <- drop_unused_factors(subset(bench, 
-#                                               (ExtraArguments != "%(cores)s0 1")
-#                                             & (ExtraArguments != "%(cores)s0 4")
-#                                             & (ExtraArguments != "1 30")
-#                                             & (ExtraArguments != "1 40")
-#                                             & (ExtraArguments != "1 5")
-#                                             ))
-
-## Normalize data to variant with object-table VirtualMachine == with-ot
-# other way to say how to spilt/group the data: .(Benchmark, VirtualMachine, ExtraArguments, Cores)
-# REM: make sure the factor for normalization is not in the list of grouping factors
-#norm_bench <- ddply(bench_filtered, ~ Benchmark + ExtraArguments + Cores,
-#                    transform,
-#                    Time.norm = Time / Time[VirtualMachine == 'with-ot'])   ## Normalize to 1-core runtime per benchmark
-
-## Add all the necessary statistic values
-#stats <- ddply(norm_bench, ~ Benchmark + VirtualMachine + Platform + ExtraArguments + Cores + None + Criterion,
-#         summarise,
-         #Time.mean=mean(Time),  # will rely on the normalized values only
-         #Time.stddev=sd(Time),
-         #Time.median=median(Time),
-         #Time.mean095Error=confInterval095Error(Time),
-         #Time.cnfIntHigh = mean(Time) + (confInterval095Error(Time)),
-         #Time.cnfIntLow = mean(Time) - (confInterval095Error(Time)),
-#         Time.mean.norm=mean(Time.norm),
-#         Time.stddev.norm=sd(Time.norm),
-#         Time.median.norm=median(Time.norm),
-#         Time.mean095Error.norm=confInterval095Error(Time.norm),
-#         Time.cnfIntHigh.norm = mean(Time.norm) + (confInterval095Error(Time.norm)),
-#         Time.cnfIntLow.norm = mean(Time.norm) - (confInterval095Error(Time.norm)),
-#         BId = interaction(Benchmark[1], ExtraArguments[1], drop=TRUE))
-
-#bench_for_bean <- ddply(bench, ~ Benchmark + ExtraArguments + VirtualMachine,
-#         transform,
-#         BId = interaction(Benchmark, ExtraArguments, VirtualMachine, drop=TRUE))
-
-stats <- ddply(bench, ~ Benchmark + VirtualMachine + Platform + ExtraArguments + Cores + None + Criterion,
-         summarise,
-         Time.mean=mean(Time),  # will rely on the normalized values only
-         Time.stddev=sd(Time),
-         Time.median=median(Time),
-         Time.mean095Error=confInterval095Error(Time),
-         Time.cnfIntHigh = mean(Time) + (confInterval095Error(Time)),
-         Time.cnfIntLow = mean(Time) - (confInterval095Error(Time)),
-         BId = interaction(Benchmark[1], ExtraArguments[1], drop=TRUE))
-
-#~ Benchmark + ExtraArguments + VirtualMachine
-#bench_sum <- ddply(bench,  ~ Benchmark + ExtraArguments + VirtualMachine, #~ Benchmark + VirtualMachine + Platform + ExtraArguments + Cores + None + Criterion,
-#         transform,
-#         Time.norm = Time / Time[VirtualMachine == 'with-ot'], drop=TRUE)
-
-
-#complete_stats <- ddply(stats, ~ VirtualMachine, summarize,
-#        Time.mean=mean(Time.mean),  # will rely on the normalized values only
-#        Time.stddev=sd(Time.mean))
-
-# Graph 1 - Intel showing weak scalability
-
-# filter out intel data
-#intel_data <- drop_unused_factors(subset(stats, VirtualMachine == "without-ot-with-backpointer"))
-#intel_scale <- custom_scale(intel_data$BId)
-#intel_data <- drop_unused_factors(stats)
-#intel_scale <- custom_scale(intel_data$BId)
+die-here # -- old code below!!!!
 
 
 create_line_plot_over_cores <- function(data, benchId, folder) {

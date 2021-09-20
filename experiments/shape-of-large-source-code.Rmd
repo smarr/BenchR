@@ -549,9 +549,10 @@ For suggestions, comments, or questions, find me on Twitter [@smarr](https://twi
 ### Distribution of Method Length
 # fit <- PPS.fit((methods_short %>% filter(linesOfCode > 0))$linesOfCode)
 # plot(fit)
-# pfit <- pareto.fit((methods_short %>% filter(linesOfCode > 0))$linesOfCode)
+
+pfit <- pareto.fit((methods_data %>% filter(linesOfCode > 0))$linesOfCode)
 #  #sigma is scale, scale is b
-# plot(pfit)
+plot(pfit)
 
 ### Attempting to generate Pareto distributed random numbers
 
@@ -603,3 +604,152 @@ analysis.
 # the following `r length(levels(factor(methods_data$project)))`
 # projects were loaded: `r str_c(levels(factor(methods_data$project)), collapse = ", ")`
 ```
+
+```{r}
+
+bins <- seq(0, max(loc))
+# bins <- 0:31
+loc <- methods_data$linesOfCode
+bins_data <- sapply(bins, function(i) {
+  length(loc[loc == i])
+})
+
+df <- data.frame(bins = bins, num = bins_data) %>%
+  filter(num > 0)
+ggplot(df, aes(x = bins, y = num)) +
+  geom_point() +
+  scale_y_log10() +
+  scale_x_log10() +
+  theme_simple(8) +
+  ylab("number of methods") +
+  xlab("lines of code") +
+  theme(plot.margin = unit(c(5,0,0,0), "mm"))
+
+
+my_fitted_fn <- function(x) {
+  -0.00003818 * exp(3.63181043 * x)
+}
+
+```
+```{r}
+my_fitted_fn <- function(x) {
+  #1000000 * exp(x / -5) / x^3
+  #500000 / x^2 * exp(-x/27)
+  # 800000 / x^2.5 * exp(-x/30)
+  #773905.529245 / x^2.7 * exp(-x/100)
+  #94338.9316 / x^0.6343 * exp(-x/7.5584)
+  92695.9275831 / x^0.6132192 * exp(x / -7.3835094)
+}
+fitted <- my_fitted_fn(bins)
+df <- data.frame(bins = bins, num = bins_data, fitted = fitted) %>%
+    filter(num > 10 & bins > 1 & num > 30 & bins <= 30)
+ggplot(df, aes(x = bins)) +
+  geom_point(aes(y = num), color="blue") +
+  geom_point(aes(y = fitted), color="orange") +
+  scale_y_log10() + scale_x_log10() + 
+  ylab("number of methods") + xlab("lines of code") + theme_simple(8) + theme(plot.margin = unit(c(5,0,0,0), "mm"))
+
+# View(fitted)
+```
+
+```{r}
+start <- list(a = 800000, b = 2.5, c=-30)
+model <- nls(num ~ a / bins^b * exp(bins / c), data=df, start=start, trace=TRUE,
+             control=nls.control(
+               minFactor = 1/(1024 * 1024 * 1024),
+               maxiter = 1000))
+library(formula.tools)
+invert(num ~ a / bins^b * exp(bins / c))
+```
+
+
+```{r}
+n <- nrow(methods_data)
+numbers <- runif(n)
+
+df <- data.frame(num = numbers)
+ggplot(df, aes(x=num)) + geom_histogram() + geom_density()
+
+# double legacy_standard_exponential(aug_bitgen_t *aug_state) {
+#   /* We use -log(1-U) since U is [0, 1) */
+#   return -log(1.0 - legacy_double(aug_state));
+# }
+# 
+# double legacy_pareto(aug_bitgen_t *aug_state, double a) {
+#   return exp(legacy_standard_exponential(aug_state) / a) - 1;
+# }
+
+std_exp <- function(U) {
+  #-log(1.0 - U)
+  -log1p(-U)
+}
+
+std_exp_num <- std_exp(numbers)
+df <- data.frame(num = std_exp_num)
+ggplot(df, aes(x=num)) + geom_histogram() + geom_density()
+
+pareto <- function (U, a) {
+  # exp(std_exp(U) / a) - 1
+  expm1(std_exp(U) / a)
+}
+
+pareto_num <- expm1(pareto(numbers, 50)) * 50000
+df <- data.frame(num = pareto_num)
+grid.arrange(
+  ggplot(df, aes(x=num)) + geom_histogram(binwidth = 10) + geom_density(),
+  ggplot(methods_data, aes(x=linesOfCode)) + geom_histogram(binwidth = 10) + geom_density(),
+  ncol = 2
+)
+```
+
+## TODO:
+- manually determine the numbers of methods with 0-30 LOC
+
+```{r}
+bins <- 0:30
+# bins <- 0:31
+loc <- methods_data$linesOfCode
+bins_data <- sapply(bins, function(i) {
+  if (i < 31) {
+    length(loc[loc == i])
+  } else {
+    sum(loc[loc >= 30]) / 30
+  }
+})
+
+ggplot(data.frame(bins = bins, num = bins_data), aes(x = bins, y = num)) +
+  # geom_col()
+  geom_point() +
+  scale_y_log10() +
+  scale_x_log10()
+  
+
+
+total <- sum(bins_data)
+parts <- bins_data / total
+ggplot(data.frame(bins = factor(bins), num = parts), aes(x = bins, y = num)) +
+  # geom_col()
+  geom_point()
+
+
+prefix_sum_parts <- cumsum(parts)
+ggplot(data.frame(bins = factor(bins), num = cumsum(parts)), aes(x = bins, y = num)) + geom_col()
+sum(parts)
+
+
+loc_from_u <- function (u) {
+  Position(function (e) { u < e }, prefix_sum_parts)
+}
+ 
+random_data <- runif(length(methods_data$linesOfCode))
+loc_data <- sapply(random_data, loc_from_u)
+ggplot(data.frame(num = loc_data),
+       aes(x = num)) +
+  geom_histogram(binwidth = 1)
+sum(loc_data)
+
+```
+squeeze all methods into 0-30LOC methods
+see what distribution looks like.
+determine the ratios for each of the 0-30 segements.
+Uses that to split the uniform range and distribute random numbers
